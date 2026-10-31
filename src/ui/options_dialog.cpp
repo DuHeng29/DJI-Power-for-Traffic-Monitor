@@ -4,6 +4,8 @@
 #include "cloud/pair_key_provider.hpp"
 #include "ui/account_login_dialog.hpp"
 #include "common/config.hpp"
+#include "common/monitor_manager.hpp"
+#include "cloud/cloud_protocol.hpp"
 #include "protocol/duml.hpp"
 
 #include <commctrl.h>
@@ -12,6 +14,7 @@
 #include <algorithm>
 #include <string>
 #include <vector>
+#include <winrt/base.h>
 
 extern HMODULE g_module;
 
@@ -34,7 +37,12 @@ enum : int {
     IDC_STATUS,
     IDC_VALUES,
     IDC_TEST,
-    IDC_KEY_INPUT
+    IDC_KEY_INPUT,
+    IDC_CLOUD_SN,
+    IDC_CLOUD_TOKEN,
+    IDC_CLOUD_REGION,
+    IDC_DEVICE_LABEL,
+    IDC_CREDENTIAL_LABEL
 };
 
 class KeyInputWindow {
@@ -185,6 +193,9 @@ private:
     HWND pair_{};
     HWND status_{};
     HWND values_{};
+    HWND cloud_serial_{};
+    HWND cloud_token_{};
+    HWND cloud_region_{};
     HFONT font_{};
     HFONT title_font_{};
     HFONT bold_font_{};
@@ -256,19 +267,19 @@ private:
         Add(L"BUTTON", L"连接方式", BS_GROUPBOX, 12, 10, 546, 50, 0, bold_font_);
         const auto ble_mode = Add(L"BUTTON", L"本地 BLE", BS_AUTORADIOBUTTON | WS_GROUP,
             28, 29, 110, 22, IDC_BLE_MODE);
-        const auto cloud_mode = Add(L"BUTTON", L"DJI Cloud（备用，暂未启用）",
+        const auto cloud_mode = Add(L"BUTTON", L"DJI Cloud",
             BS_AUTORADIOBUTTON, 158, 29, 215, 22, IDC_CLOUD_MODE);
-        SendMessageW(ble_mode, BM_SETCHECK, BST_CHECKED, 0);
-        EnableWindow(cloud_mode, FALSE);
+        SendMessageW(ble_mode, BM_SETCHECK, editing_.mode == ConnectionMode::ble ? BST_CHECKED : BST_UNCHECKED, 0);
+        SendMessageW(cloud_mode, BM_SETCHECK, editing_.mode == ConnectionMode::cloud ? BST_CHECKED : BST_UNCHECKED, 0);
 
         Add(L"BUTTON", L"设备与凭据", BS_GROUPBOX, 12, 66, 546, 156, 0, bold_font_);
-        Add(L"STATIC", L"设备：", SS_LEFT, 28, 96, 70, 20);
+        Add(L"STATIC", L"设备：", SS_LEFT, 28, 96, 70, 20, IDC_DEVICE_LABEL);
         device_ = Add(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_TABSTOP | WS_VSCROLL,
             105, 91, 335, 180, IDC_DEVICE);
         SetComboHeight(device_, 26);
         Add(L"BUTTON", L"重新扫描", BS_PUSHBUTTON | WS_TABSTOP, 449, 91, 95, 26, IDC_SCAN);
 
-        Add(L"STATIC", L"Pair Key：", SS_LEFT, 28, 132, 70, 20);
+        Add(L"STATIC", L"Pair Key：", SS_LEFT, 28, 132, 70, 20, IDC_CREDENTIAL_LABEL);
         pair_ = Add(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_TABSTOP | WS_VSCROLL,
             105, 127, 267, 160, IDC_PAIR_KEY);
         SetComboHeight(pair_, 26);
@@ -278,6 +289,19 @@ private:
 
         Add(L"STATIC", L"登录信息和临时 Token 仅保存在内存中，获取完成后立即清除。",
             SS_LEFT, 105, 162, 439, 18, IDC_SUBTITLE);
+        cloud_serial_ = Add(L"EDIT", editing_.cloud_serial.c_str(), WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP,
+            105, 91, 335, 26, IDC_CLOUD_SN);
+        const std::wstring token_text(editing_.cloud_token.begin(), editing_.cloud_token.end());
+        cloud_token_ = Add(L"EDIT", token_text.c_str(), WS_BORDER | ES_AUTOHSCROLL | ES_PASSWORD | WS_TABSTOP,
+            105, 127, 335, 26, IDC_CLOUD_TOKEN);
+        SendMessageW(cloud_serial_, EM_SETLIMITTEXT, 64, 0);
+        SendMessageW(cloud_token_, EM_SETLIMITTEXT, 16384, 0);
+        cloud_region_ = Add(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | WS_TABSTOP,
+            105, 158, 439, 140, IDC_CLOUD_REGION);
+        const wchar_t* regions[] = {L"海外 VG · home-api-vg.djigate.com", L"国内 HZ · home-api-hz.djigate.com", L"默认 · home-api.djigate.com"};
+        for (const auto* region : regions) SendMessageW(cloud_region_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(region));
+        const int region = editing_.cloud_api_host == L"home-api-hz.djigate.com" ? 1 : editing_.cloud_api_host == L"home-api.djigate.com" ? 2 : 0;
+        SendMessageW(cloud_region_, CB_SETCURSEL, region, 0);
 
         const auto auto_connect = Add(L"BUTTON", L"启动后自动连接",
             BS_AUTOCHECKBOX | WS_TABSTOP, 28, 190, 155, 22, IDC_AUTO_CONNECT);
@@ -301,7 +325,26 @@ private:
 
         RefreshKeys(editing_.pair_key);
         RefreshDevices();
+        UpdateMode();
         SetTimer(hwnd_, 1, 400, nullptr);
+    }
+
+    void UpdateMode() {
+        const bool cloud = editing_.mode == ConnectionMode::cloud;
+        for (const auto id : {IDC_DEVICE, IDC_PAIR_KEY, IDC_DELETE_KEY, IDC_ADD_KEY, IDC_SUBTITLE})
+            ShowWindow(GetDlgItem(hwnd_, id), cloud ? SW_HIDE : SW_SHOW);
+        for (const auto id : {IDC_CLOUD_SN, IDC_CLOUD_TOKEN, IDC_CLOUD_REGION})
+            ShowWindow(GetDlgItem(hwnd_, id), cloud ? SW_SHOW : SW_HIDE);
+        SetDlgItemTextW(hwnd_, IDC_DEVICE_LABEL, cloud ? L"设备 SN：" : L"设备：");
+        SetDlgItemTextW(hwnd_, IDC_CREDENTIAL_LABEL, cloud ? L"Token：" : L"Pair Key：");
+        SetDlgItemTextW(hwnd_, IDC_SCAN, cloud ? L"登录选设备" : L"重新扫描");
+    }
+
+    static std::wstring ReadText(HWND control) {
+        std::wstring text(static_cast<std::size_t>(GetWindowTextLengthW(control)) + 1, L'\0');
+        const int length = GetWindowTextW(control, text.data(), static_cast<int>(text.size()));
+        text.resize(static_cast<std::size_t>(length));
+        return text;
     }
 
     void RefreshKeys(const std::string& selected) {
@@ -347,6 +390,23 @@ private:
     }
 
     bool ReadForm(bool show_error, bool allow_empty_key = false) {
+        editing_.auto_connect = SendDlgItemMessageW(hwnd_, IDC_AUTO_CONNECT, BM_GETCHECK, 0, 0) == BST_CHECKED;
+        editing_.auto_reconnect = SendDlgItemMessageW(hwnd_, IDC_AUTO_RECONNECT, BM_GETCHECK, 0, 0) == BST_CHECKED;
+        if (editing_.mode == ConnectionMode::cloud) {
+            auto token = ReadText(cloud_token_);
+            editing_.cloud_token = winrt::to_string(token);
+            if (!token.empty()) SecureZeroMemory(token.data(), token.size() * sizeof(wchar_t));
+            editing_.cloud_serial = ReadText(cloud_serial_);
+            const auto region = SendMessageW(cloud_region_, CB_GETCURSEL, 0, 0);
+            editing_.cloud_api_host = region == 1 ? L"home-api-hz.djigate.com" : region == 2 ? L"home-api.djigate.com" : L"home-api-vg.djigate.com";
+            if (allow_empty_key && editing_.cloud_token.empty() && editing_.cloud_serial.empty()) return true;
+            std::wstring error;
+            if (!cloud::ValidateConfig(editing_, error)) {
+                if (show_error) MessageBoxW(hwnd_, error.c_str(), L"DJI Cloud", MB_ICONWARNING);
+                return false;
+            }
+            return true;
+        }
         const auto key_index = static_cast<int>(SendMessageW(pair_, CB_GETCURSEL, 0, 0));
         if (key_index < 0 || static_cast<std::size_t>(key_index) >= editing_.pair_keys.size()) {
             if (!allow_empty_key) {
@@ -375,10 +435,21 @@ private:
 
     void FetchKey() {
         // 使用与已验证 Python 工具相同的 DJI Home 移动端登录流程。
-        const auto cloud_devices = ShowAccountLoginDialog(hwnd_);
+        std::wstring token;
+        const bool cloud = editing_.mode == ConnectionMode::cloud;
+        const auto cloud_devices = ShowAccountLoginDialog(hwnd_, cloud ? &token : nullptr);
         if (cloud_devices.empty()) return;
         AddKey(cloud_devices.front().pair_key);
         editing_.device_name = cloud_devices.front().name;
+        if (cloud) {
+            editing_.cloud_token = winrt::to_string(token);
+            editing_.cloud_serial = cloud_devices.front().serial_number;
+            SetWindowTextW(cloud_serial_, editing_.cloud_serial.c_str());
+            SetWindowTextW(cloud_token_, token.c_str());
+            if (!token.empty()) SecureZeroMemory(token.data(), token.size() * sizeof(wchar_t));
+            MessageBoxW(hwnd_, L"已选择云端设备。点击测试连接；确定后将用当前 Windows 用户的 DPAPI 加密保存 Token。", L"DJI Cloud", MB_ICONINFORMATION);
+            return;
+        }
         const auto message = L"已取得 " + std::to_wstring(cloud_devices.size()) +
             L" 台设备的凭据，当前填入：" + cloud_devices.front().name;
         MessageBoxW(hwnd_, message.c_str(), L"获取 Key 成功", MB_ICONINFORMATION);
@@ -388,8 +459,11 @@ private:
         const auto latest_devices = BleManager::Instance().Devices();
         if (latest_devices.size() != known_device_count_) RefreshDevices();
 
-        const auto value = BleManager::Instance().Snapshot();
+        auto value = MonitorManager::Instance().Snapshot();
         SetWindowTextW(status_, value.status.c_str());
+        if (value.connection != ConnectionState::connected || value.updated_at == std::chrono::steady_clock::time_point{} ||
+            std::chrono::steady_clock::now() - value.updated_at >= value.stale_after)
+            value.input_w = value.output_w = value.battery_percent = -1;
         const auto field = [](int number) { return number < 0 ? std::wstring(L"--") : std::to_wstring(number); };
         const auto net = value.input_w < 0 || value.output_w < 0 ? std::wstring(L"--") : std::to_wstring(value.output_w - value.input_w);
         const auto text = L"输入  " + field(value.input_w) + L" W      输出  " +
@@ -440,10 +514,16 @@ private:
         }
         case WM_COMMAND:
             switch (LOWORD(wp)) {
+            case IDC_BLE_MODE:
+            case IDC_CLOUD_MODE:
+                editing_.mode = LOWORD(wp) == IDC_CLOUD_MODE ? ConnectionMode::cloud : ConnectionMode::ble;
+                UpdateMode();
+                return 0;
             case IDC_DEVICE:
                 if (HIWORD(wp) == CBN_SELCHANGE) device_cleared_ = false;
                 return 0;
             case IDC_SCAN:
+                if (editing_.mode == ConnectionMode::cloud) { FetchKey(); return 0; }
                 BleManager::Instance().Rescan();
                 known_device_count_ = static_cast<std::size_t>(-1);
                 RefreshDevices();
@@ -472,25 +552,31 @@ private:
                 cleared.device_name.clear();
                 cleared.pair_key.clear();
                 cleared.pair_keys.clear();
+                cleared.cloud_token.clear();
+                cleared.cloud_serial.clear();
                 if (!SaveConfig(cleared)) { MessageBoxW(hwnd_, L"清空配置失败。", L"DJI Power", MB_ICONERROR); return 0; }
                 original_ = cleared;
                 editing_.bluetooth_address = 0;
                 editing_.device_name.clear();
                 editing_.pair_key.clear();
                 editing_.pair_keys.clear();
+                editing_.cloud_token.clear();
+                editing_.cloud_serial.clear();
+                SetWindowTextW(cloud_token_, L"");
+                SetWindowTextW(cloud_serial_, L"");
                 device_cleared_ = true;
                 changed_ = true;
                 RefreshKeys({});
                 SendMessageW(device_, CB_SETCURSEL, static_cast<WPARAM>(-1), 0);
-                BleManager::Instance().Reconfigure(cleared);
+                MonitorManager::Instance().Reconfigure(cleared);
                 return 0;
             }
             case IDC_TEST:
                 if (ReadForm(true)) {
                     auto test = editing_;
                     test.auto_connect = true;
-                    BleManager::Instance().Reconfigure(test);
-                    BleManager::Instance().ConnectNow();
+                    MonitorManager::Instance().Reconfigure(test);
+                    MonitorManager::Instance().ConnectNow();
                 }
                 return 0;
             case IDOK:
@@ -498,12 +584,12 @@ private:
                     changed_ = SaveConfig(editing_);
                     if (!changed_) { MessageBoxW(hwnd_, L"保存配置失败。", L"DJI Power", MB_ICONERROR); return 0; }
                     accepted_ = true;
-                    BleManager::Instance().Reconfigure(editing_);
+                    MonitorManager::Instance().Reconfigure(editing_);
                     DestroyWindow(hwnd_);
                 }
                 return 0;
             case IDCANCEL:
-                BleManager::Instance().Reconfigure(original_);
+                MonitorManager::Instance().Reconfigure(original_);
                 DestroyWindow(hwnd_);
                 return 0;
             default:
@@ -511,7 +597,7 @@ private:
             }
             break;
         case WM_CLOSE:
-            if (!accepted_) BleManager::Instance().Reconfigure(original_);
+            if (!accepted_) MonitorManager::Instance().Reconfigure(original_);
             DestroyWindow(hwnd_);
             return 0;
         case WM_DESTROY:

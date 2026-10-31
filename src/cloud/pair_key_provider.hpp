@@ -61,7 +61,8 @@ public:
     virtual std::vector<CloudDevice> LoginAndFetch(
         AccountLoginSession& login, const std::wstring& account,
         const std::wstring& password, const std::wstring& image_code,
-        const std::wstring& verification_code, std::wstring& error) = 0;
+        const std::wstring& verification_code, std::wstring& error,
+        std::wstring* member_token = nullptr) = 0;
 
     // 初始化 DJI 官方账号会话，并返回本次会话对应的图片验证码 PNG。
     virtual bool BeginSmsLogin(SmsLoginSession& login, std::vector<std::uint8_t>& captcha_png,

@@ -87,7 +87,7 @@ HBITMAP DecodeCaptcha(const std::vector<std::uint8_t>& png, UINT dpi) {
 
 class AccountLoginWindow {
 public:
-    explicit AccountLoginWindow(HWND parent) : parent_(parent) {}
+    explicit AccountLoginWindow(HWND parent, std::wstring* token) : parent_(parent), member_token_(token) {}
 
     std::vector<CloudDevice> Show() {
         const HRESULT com_result = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
@@ -135,6 +135,7 @@ private:
     UINT dpi_{96};
     bool uninitialize_com_{};
     AccountLoginSession login_;
+    std::wstring* member_token_{};
     std::vector<CloudDevice> devices_;
 
     int Scale(int value) const { return MulDiv(value, static_cast<int>(dpi_), 96); }
@@ -280,7 +281,7 @@ private:
         SetStatus(L"正在登录 DJI Home 并查询绑定设备…");
         std::wstring error;
         devices_ = DefaultPairKeyProvider().LoginAndFetch(
-            login_, account, password, image_code, verification, error);
+            login_, account, password, image_code, verification, error, member_token_);
 
         // 输入框与临时副本都属于敏感数据，用完立即覆盖。
         if (!password.empty()) SecureZeroMemory(password.data(), password.size() * sizeof(wchar_t));
@@ -503,12 +504,16 @@ private:
 };
 } // namespace
 
-std::vector<CloudDevice> ShowAccountLoginDialog(HWND parent) {
-    AccountLoginWindow login_window(parent);
+std::vector<CloudDevice> ShowAccountLoginDialog(HWND parent, std::wstring* member_token) {
+    std::wstring token;
+    AccountLoginWindow login_window(parent, member_token ? &token : nullptr);
     auto devices = login_window.Show();
     if (devices.empty()) return {};
 
     DeviceSelectionWindow selection_window(parent, std::move(devices));
-    return selection_window.Show();
+    auto chosen = selection_window.Show();
+    if (member_token && !chosen.empty()) *member_token = token;
+    if (!token.empty()) SecureZeroMemory(token.data(), token.size() * sizeof(wchar_t));
+    return chosen;
 }
 } // namespace dji_power

@@ -1,6 +1,7 @@
 // 本文件使用 C++/WinRT 在插件后台线程中维持 DJI Power 的 BLE/DUML 会话。
 #include "ble/ble_manager.hpp"
 #include "protocol/duml.hpp"
+#include "protocol/authentication.hpp"
 
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
@@ -232,23 +233,15 @@ struct BleManager::Impl {
     }
     bool Authenticate(const std::string& pair_key) {
         store.SetStatus(ConnectionState::authenticating, L"正在验证 Pair Key");
-        std::wstring failure;
-        connection_stage = L"获取鉴权挑战";
-        const auto challenge = Request(0x6A, {0x00}, 8s, &failure);
-        if (!challenge) return Fail(connection_stage + L"失败：" + failure);
-        if (challenge->payload.empty()) return Fail(L"获取鉴权挑战失败：响应为空");
-        if (challenge->payload[0] != 0) return Fail(L"设备拒绝鉴权挑战（状态码 " + std::to_wstring(challenge->payload[0]) + L"）");
-        if (challenge->payload.size() < 5) return Fail(L"获取鉴权挑战失败：响应长度不足");
-        std::vector<std::uint8_t> material{0x01};
-        material.insert(material.end(), challenge->payload.begin() + 1, challenge->payload.begin() + 5);
-        material.insert(material.end(), pair_key.begin(), pair_key.end());
-        material.push_back(0);
-        connection_stage = L"提交 Pair Key 验证";
-        const auto answer = Request(0x6A, std::move(material), 8s, &failure);
-        if (!answer) return Fail(connection_stage + L"失败：" + failure);
-        if (answer->payload.empty()) return Fail(L"Pair Key 验证失败：响应为空");
-        if (answer->payload[0] != 0) return Fail(L"设备拒绝 Pair Key 验证（状态码 " + std::to_wstring(answer->payload[0]) + L"）");
-        return true;
+        std::wstring error;
+        const auto request = [this](std::wstring_view stage, std::vector<std::uint8_t> payload,
+                                    std::wstring& failure) -> std::optional<std::vector<std::uint8_t>> {
+            connection_stage = stage;
+            const auto response = Request(0x6A, std::move(payload), 8s, &failure);
+            if (!response) return std::nullopt;
+            return response->payload;
+        };
+        return duml::AuthenticatePairKey(pair_key, request, error) || Fail(std::move(error));
     }
     bool Connect(std::uint64_t address, const std::string& pair_key) {
         store.SetStatus(ConnectionState::connecting, L"正在连接 " + AddressText(address));

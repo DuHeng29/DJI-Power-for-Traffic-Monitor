@@ -6,5 +6,5 @@
 #include <vector>
 
 namespace dji_power {
-std::vector<CloudDevice> ShowAccountLoginDialog(HWND parent);
+std::vector<CloudDevice> ShowAccountLoginDialog(HWND parent, std::wstring* member_token = nullptr);
 } // namespace dji_power

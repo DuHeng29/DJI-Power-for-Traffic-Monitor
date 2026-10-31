@@ -5,7 +5,12 @@
 #include <vector>
 
 namespace dji_power {
+enum class ConnectionMode { ble, cloud };
 struct PluginConfig {
+    ConnectionMode mode{ConnectionMode::ble};
+    std::string cloud_token;
+    std::wstring cloud_serial;
+    std::wstring cloud_api_host{L"home-api-vg.djigate.com"};
     std::uint64_t bluetooth_address{};
     std::wstring device_name;
     std::string pair_key;

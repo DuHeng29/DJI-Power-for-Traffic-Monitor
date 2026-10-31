@@ -1,6 +1,6 @@
 # 本文件定义 DJIPowerPlugin 的构建、依赖和测试入口。
 cmake_minimum_required(VERSION 3.24)
-project(DJIPowerForTrafficMonitor VERSION 0.3.0 LANGUAGES CXX)
+project(DJIPowerForTrafficMonitor VERSION 0.4.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -27,6 +27,7 @@ else()
 endif()
 
 add_library(dji_power_core STATIC
+    src/protocol/authentication.cpp
     src/protocol/duml.cpp
     src/common/config.cpp
     src/common/telemetry_store.cpp)
@@ -34,9 +35,17 @@ target_include_directories(dji_power_core PUBLIC src)
 target_compile_definitions(dji_power_core PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_link_libraries(dji_power_core PUBLIC crypt32)
 
+add_library(dji_cloud_protocol STATIC src/cloud/cloud_protocol.cpp)
+target_include_directories(dji_cloud_protocol PUBLIC src)
+target_compile_definitions(dji_cloud_protocol PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_compile_options(dji_cloud_protocol PRIVATE /W4 /permissive- /utf-8)
+target_link_libraries(dji_cloud_protocol PUBLIC windowsapp)
+
 add_library(DJIPowerPlugin SHARED
     src/plugin/dllmain.cpp
     src/plugin/plugin.cpp
+    src/common/monitor_manager.cpp
+    src/cloud/cloud_manager.cpp
     src/ble/ble_manager.cpp
     src/cloud/pair_key_provider.cpp
     src/ui/options_dialog.cpp
@@ -44,7 +53,7 @@ add_library(DJIPowerPlugin SHARED
     src/ui/sms_login_dialog.cpp)
 target_include_directories(DJIPowerPlugin PRIVATE src "${TM_INCLUDE_DIR}")
 target_compile_definitions(DJIPowerPlugin PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
-target_link_libraries(DJIPowerPlugin PRIVATE dji_power_core windowsapp winhttp comctl32 crypt32 bcrypt uxtheme windowscodecs ole32)
+target_link_libraries(DJIPowerPlugin PRIVATE dji_power_core dji_cloud_protocol windowsapp winhttp comctl32 crypt32 bcrypt uxtheme windowscodecs ole32)
 set_target_properties(DJIPowerPlugin PROPERTIES OUTPUT_NAME "DJIPowerPlugin")
 
 if(MSVC)
@@ -89,6 +98,30 @@ target_link_libraries(dji_auth_ctl PRIVATE user32)
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(options_smoke_tests tests/options_smoke_tests.cpp)
+    target_include_directories(options_smoke_tests PRIVATE "${TM_INCLUDE_DIR}")
+    target_compile_definitions(options_smoke_tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_compile_options(options_smoke_tests PRIVATE /utf-8)
+    add_test(NAME options_smoke_tests COMMAND options_smoke_tests "$<TARGET_FILE:DJIPowerPlugin>")
+    set_tests_properties(options_smoke_tests PROPERTIES TIMEOUT 10)
+
+    add_executable(cloud_manager_tests tests/cloud_manager_tests.cpp src/cloud/cloud_manager.cpp)
+    target_link_libraries(cloud_manager_tests PRIVATE dji_power_core dji_cloud_protocol)
+    target_compile_definitions(cloud_manager_tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_compile_options(cloud_manager_tests PRIVATE /utf-8)
+    add_test(NAME cloud_manager_tests COMMAND cloud_manager_tests)
+    set_tests_properties(cloud_manager_tests PROPERTIES TIMEOUT 10)
+
+    add_executable(cloud_protocol_tests tests/cloud_protocol_tests.cpp)
+    target_link_libraries(cloud_protocol_tests PRIVATE dji_cloud_protocol)
+    target_compile_options(cloud_protocol_tests PRIVATE /utf-8)
+    add_test(NAME cloud_protocol_tests COMMAND cloud_protocol_tests)
+
+    add_executable(authentication_tests tests/authentication_tests.cpp)
+    target_link_libraries(authentication_tests PRIVATE dji_power_core)
+    target_compile_options(authentication_tests PRIVATE /utf-8)
+    add_test(NAME authentication_tests COMMAND authentication_tests)
+
     add_executable(config_tests tests/config_tests.cpp)
     target_link_libraries(config_tests PRIVATE dji_power_core)
     target_compile_definitions(config_tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)

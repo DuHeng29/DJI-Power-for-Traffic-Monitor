@@ -523,7 +523,8 @@ public:
     std::vector<CloudDevice> LoginAndFetch(
         AccountLoginSession& login, const std::wstring& account,
         const std::wstring& password, const std::wstring& image_code,
-        const std::wstring& verification_code, std::wstring& error) override {
+        const std::wstring& verification_code, std::wstring& error,
+        std::wstring* member_token) override {
         if (login.captcha_ticket.empty()) {
             std::string captcha_form;
             AppendForm(captcha_form, "captchaType", "imageCaptcha");
@@ -573,6 +574,7 @@ public:
         // 窄字符串中的 Member Token 不再使用，立即擦除其内存副本。
         SecureZeroMemory(token.data(), token.size());
         auto devices = FetchWithMemberToken(wide_token, error);
+        if (member_token && !devices.empty()) *member_token = wide_token;
         if (!wide_token.empty()) SecureZeroMemory(wide_token.data(), wide_token.size() * sizeof(wchar_t));
         if (!devices.empty()) login.Clear();
         return devices;

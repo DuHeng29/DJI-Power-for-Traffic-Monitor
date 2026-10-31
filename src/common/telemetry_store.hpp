@@ -16,6 +16,7 @@ struct TelemetrySnapshot {
     std::wstring device_name;
     std::wstring status{L"未启动"};
     std::chrono::steady_clock::time_point updated_at{};
+    std::chrono::seconds stale_after{10};
 };
 
 class TelemetryStore {

@@ -61,6 +61,10 @@ bool IsValidPairKey(const std::string& value) {
 }
 PluginConfig LoadConfig() {
     PluginConfig result;
+    result.mode = ReadIni(L"mode") == L"cloud" ? ConnectionMode::cloud : ConnectionMode::ble;
+    result.cloud_token = Unprotect(ReadIni(L"cloud_token_dpapi"));
+    result.cloud_serial = ReadIni(L"cloud_serial");
+    result.cloud_api_host = ReadIni(L"cloud_api_host", L"home-api-vg.djigate.com");
     result.device_name = ReadIni(L"device_name");
     result.auto_connect = ReadIni(L"auto_connect", L"1") != L"0";
     result.auto_reconnect = ReadIni(L"auto_reconnect", L"1") != L"0";
@@ -82,11 +86,17 @@ bool SaveConfig(const PluginConfig& config) {
     wchar_t address[17]{};
     swprintf_s(address, L"%012llX", static_cast<unsigned long long>(config.bluetooth_address));
     const auto secret = Protect(config.pair_key);
+    const auto cloud_secret = Protect(config.cloud_token);
+    if (!config.cloud_token.empty() && cloud_secret.empty()) return false;
     std::string keys;
     for (const auto& key : config.pair_keys) if (IsValidPairKey(key)) keys += key;
     const auto secrets = Protect(keys);
     if ((!config.pair_key.empty() && secret.empty()) || (!keys.empty() && secrets.empty())) return false;
-    return WritePrivateProfileStringW(L"connection", L"device_name", config.device_name.c_str(), path.c_str()) &&
+    return WritePrivateProfileStringW(L"connection", L"mode", config.mode == ConnectionMode::cloud ? L"cloud" : L"ble", path.c_str()) &&
+           WritePrivateProfileStringW(L"connection", L"cloud_token_dpapi", cloud_secret.c_str(), path.c_str()) &&
+           WritePrivateProfileStringW(L"connection", L"cloud_serial", config.cloud_serial.c_str(), path.c_str()) &&
+           WritePrivateProfileStringW(L"connection", L"cloud_api_host", config.cloud_api_host.c_str(), path.c_str()) &&
+           WritePrivateProfileStringW(L"connection", L"device_name", config.device_name.c_str(), path.c_str()) &&
            WritePrivateProfileStringW(L"connection", L"bluetooth_address", address, path.c_str()) &&
            WritePrivateProfileStringW(L"connection", L"pair_key_dpapi", secret.c_str(), path.c_str()) &&
            WritePrivateProfileStringW(L"connection", L"pair_keys_dpapi", secrets.c_str(), path.c_str()) &&
