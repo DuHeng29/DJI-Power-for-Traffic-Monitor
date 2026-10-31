@@ -1,5 +1,7 @@
 # DJI Power for TrafficMonitor
 
+当前正式版本：**1.0.0**。
+
 一个面向 Windows 的原生 [TrafficMonitor](https://github.com/zhongyang219/TrafficMonitor) 插件，通过本地蓝牙低功耗（BLE）或 DJI Cloud 读取 DJI Power 户外电源的实时状态。
 
 插件以单个 DLL 运行，不依赖 Python、Home Assistant 或额外后台进程。本地 BLE 模式中，DJI 账号仅用于首次获取 Pair Key，之后无需云端；DJI Cloud 模式通过 HTTPS 获取短期 MQTT 凭据，再通过 TLS 接收设备遥测，需要电脑和电源均联网。
@@ -50,6 +52,13 @@ TrafficMonitor → DJIPowerPlugin.dll → Windows BLE → DJI Power
 - DJI Home 登录接口不是公开 API，可能随时发生变化
 - 已实测真实账号登录和 Pair Key 获取；长期 BLE 稳定性仍需更多设备验证
 
+### 长时间运行后的蓝牙连接异常
+
+> [!WARNING]
+> DJI Power 的部分固件可能存在 **32 位毫秒计时器溢出／回绕处理 bug**。设备连续运行超过约 **49.7 天**后，可能出现无法连接蓝牙或无法完成 BLE 鉴权的情况。遇到这类问题，请尝试将 **DJI Power 设备本体完整关机后重新开机**，再重新连接；仅重启插件、TrafficMonitor 或电脑可能无法重置设备内部的计时器。
+
+约 49.7 天来自 `2^32` 毫秒的计数周期。计时器溢出是目前的可能原因，尚未得到 DJI 官方确认，受影响的型号与固件版本也有待验证；不能仅凭蓝牙连接失败就认定触发了这一问题。反馈时请附上设备型号、固件版本、连续运行时间，以及重启设备后是否恢复连接。
+
 ## 系统要求
 
 - Windows 10 或 Windows 11
@@ -97,7 +106,7 @@ Cloud 模式仅监控所选 SN，不占用本地 BLE 连接。电源必须已在
 
 ### 手工配置
 
-如果已有 Pair Key，可直接粘贴 32 位十六进制字符串，再选择 BLE 设备并测试连接。
+如果已有 Pair Key，在本地 BLE 模式下点击 Pair Key 右侧的“+”，粘贴 32 位十六进制字符串并确认，再从下拉列表选择该 Key、选择 BLE 设备并测试连接。
 
 ## 隐私与安全
 
@@ -159,9 +168,11 @@ tools/        独立认证调试工具
 
 ## 致谢
 
+本项目的插件接口、本地 BLE 和 DJI Cloud 实现参考了以下项目：
+
 - [TrafficMonitor](https://github.com/zhongyang219/TrafficMonitor)：提供插件宿主、插件接口和开发文档，使 DJI Power 数据能够显示在任务栏与主窗口中。
-- [ha-dji-power-ble](https://github.com/zuyan9/ha-dji-power-ble)：为 DJI Power 本地 BLE、DUML 通信、设备识别和通过 DJI Home 一次性获取 Pair Key 提供了重要灵感及协议验证参考。
-- [dji-power-home-assistant](https://github.com/trfr3ak/dji-power-home-assistant)：提供 DJI Cloud MQTT 凭据接口、订阅主题及 `device_osd` 字段映射参考。本项目依据协议行为独立实现原生 C++ 通道，未复制其 Python 源码。
+- [zuyan9/ha-dji-power-ble](https://github.com/zuyan9/ha-dji-power-ble)：本地 BLE 的主要协议参考，涵盖 DUML 通信、设备识别、通过 DJI Home 获取 Pair Key，以及鉴权状态码 `03` 下重新获取挑战后重试的处理方式。
+- [trfr3ak/dji-power-home-assistant](https://github.com/trfr3ak/dji-power-home-assistant)：DJI Cloud 通道的主要参考，涵盖使用 Member Token 获取短期 MQTT 凭据、TLS 连接、设备属性订阅主题，以及 `device_osd` 中电量、功率和剩余时间的字段映射。本项目依据这些协议行为独立实现原生 C++ 通道，未复制其 Python 源码。
 
 感谢以上项目的维护者和贡献者。本仓库不打包参考项目源码；第三方项目、接口文件和依赖继续适用其各自许可证。
 

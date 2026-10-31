@@ -42,7 +42,7 @@ const wchar_t* Plugin::GetInfo(PluginInfoIndex index) {
     case TMI_DESCRIPTION: return L"通过本地 BLE 或 DJI Cloud 显示 DJI Power 电量与功率";
     case TMI_AUTHOR: return L"DuHeng29";
     case TMI_COPYRIGHT: return L"Copyright (c) 2026 DuHeng29";
-    case TMI_VERSION: return L"0.4.0";
+    case TMI_VERSION: return L"1.0.0";
     case TMI_URL: return L"https://github.com/DuHeng29/DJI-Power-for-Traaffic-Monitor";
     default: return L"";
     }

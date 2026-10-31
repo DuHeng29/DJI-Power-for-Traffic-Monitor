@@ -1,6 +1,6 @@
 # 本文件定义 DJIPowerPlugin 的构建、依赖和测试入口。
 cmake_minimum_required(VERSION 3.24)
-project(DJIPowerForTrafficMonitor VERSION 0.4.0 LANGUAGES CXX)
+project(DJIPowerForTrafficMonitor VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
