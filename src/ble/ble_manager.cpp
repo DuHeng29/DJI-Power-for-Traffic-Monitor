@@ -336,7 +336,7 @@ struct BleManager::Impl {
                 reconnect_allowed = true;
                 std::unique_lock lock(mutex);
                 condition.wait(lock, [&] { return token.stop_requested() || reconnect_requested || link_lost; });
-                if (link_lost && !current.auto_reconnect) reconnect_allowed = false;
+                if (link_lost && !config.auto_reconnect) reconnect_allowed = false;
                 lock.unlock();
                 Disconnect();
                 if (!token.stop_requested()) store.SetStatus(ConnectionState::scanning, L"连接已断开，正在重连");
@@ -354,6 +354,11 @@ BleManager::~BleManager() { Stop(); }
 void BleManager::Start() { impl_->Start(); }
 void BleManager::Stop() { impl_->Stop(); }
 void BleManager::Reconfigure(const PluginConfig& value) { std::scoped_lock lock(impl_->mutex); impl_->config = value; impl_->reconnect_requested = true; impl_->condition.notify_all(); }
+void BleManager::UpdatePolicy(const PluginConfig& value) {
+    std::scoped_lock lock(impl_->mutex);
+    impl_->config.auto_connect = value.auto_connect;
+    impl_->config.auto_reconnect = value.auto_reconnect;
+}
 void BleManager::Rescan() {
     std::scoped_lock lock(impl_->mutex);
     impl_->devices.clear();

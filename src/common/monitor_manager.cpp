@@ -22,6 +22,10 @@ void MonitorManager::ConnectNow() {
     if (mode_ == ConnectionMode::cloud) CloudManager::Instance().ConnectNow();
     else BleManager::Instance().ConnectNow();
 }
+void MonitorManager::UpdatePolicy(const PluginConfig& config) {
+    if (mode_ == ConnectionMode::cloud) CloudManager::Instance().UpdatePolicy(config);
+    else BleManager::Instance().UpdatePolicy(config);
+}
 TelemetrySnapshot MonitorManager::Snapshot() const {
     return mode_ == ConnectionMode::cloud ? CloudManager::Instance().Snapshot() : BleManager::Instance().Snapshot();
 }

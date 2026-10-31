@@ -8,6 +8,7 @@ public:
     static MonitorManager& Instance();
     void Start();
     void Reconfigure(const PluginConfig& config);
+    void UpdatePolicy(const PluginConfig& config);
     void ConnectNow();
     TelemetrySnapshot Snapshot() const;
 private:

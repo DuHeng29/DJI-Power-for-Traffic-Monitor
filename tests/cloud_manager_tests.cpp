@@ -17,6 +17,9 @@ int main() {
     manager.Reconfigure(config);
     std::this_thread::sleep_for(100ms);
     REQUIRE_TEST(manager.Snapshot().connection == dji_power::ConnectionState::stopped);
+    config.auto_reconnect = false;
+    manager.UpdatePolicy(config);
+    REQUIRE_TEST(manager.Snapshot().connection == dji_power::ConnectionState::stopped);
     const auto start = std::chrono::steady_clock::now();
     manager.Stop();
     REQUIRE_TEST(std::chrono::steady_clock::now() - start < 3s);

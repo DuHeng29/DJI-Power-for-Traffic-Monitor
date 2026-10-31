@@ -8,6 +8,7 @@ class CloudManager {
 public:
     static CloudManager& Instance();
     void Reconfigure(const PluginConfig& config);
+    void UpdatePolicy(const PluginConfig& config);
     void ConnectNow();
     void Stop();
     TelemetrySnapshot Snapshot() const;

@@ -86,6 +86,18 @@ std::wstring ModuleDirectory() {
 bool IsValidPairKey(const std::string& value) {
     return value.size() == 32 && std::all_of(value.begin(), value.end(), [](unsigned char c) { return std::isxdigit(c) != 0; });
 }
+bool SameConnectionSettings(const PluginConfig& left, const PluginConfig& right) {
+    return left.auto_connect == right.auto_connect && left.auto_reconnect == right.auto_reconnect && SameConnectionTarget(left, right);
+}
+bool SameConnectionTarget(const PluginConfig& left, const PluginConfig& right) {
+    if (left.mode != right.mode) return false;
+    if (left.mode == ConnectionMode::cloud)
+        return left.cloud_serial == right.cloud_serial && left.cloud_token == right.cloud_token && left.cloud_api_host == right.cloud_api_host;
+    return left.bluetooth_address == right.bluetooth_address && left.pair_key.size() == right.pair_key.size() &&
+        std::equal(left.pair_key.begin(), left.pair_key.end(), right.pair_key.begin(), [](unsigned char a, unsigned char b) {
+            return std::tolower(a) == std::tolower(b);
+        });
+}
 PluginConfig LoadConfig() {
     PluginConfig result;
     result.mode = ReadIni(L"mode") == L"cloud" ? ConnectionMode::cloud : ConnectionMode::ble;

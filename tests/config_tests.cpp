@@ -23,6 +23,41 @@ int main() {
     config.cloud_token = "CN_offline-test-token";
     config.cloud_serial = L"TEST123";
     config.cloud_api_host = L"home-api-hz.djigate.com";
+    {
+        auto edited = config;
+        edited.device_name = L"Renamed";
+        edited.cloud_tokens.push_back("US_another-history-token");
+        edited.cloud_serials.push_back(L"ANOTHER_SN");
+        edited.pair_key = "abcdef0123456789abcdef0123456789";
+        edited.bluetooth_address = 1;
+        REQUIRE_TEST(dji_power::SameConnectionSettings(config, edited));
+        edited.auto_connect = !config.auto_connect;
+        edited.auto_reconnect = !config.auto_reconnect;
+        REQUIRE_TEST(!dji_power::SameConnectionSettings(config, edited));
+        REQUIRE_TEST(dji_power::SameConnectionTarget(config, edited));
+        edited = config;
+        edited.cloud_token += "changed";
+        REQUIRE_TEST(!dji_power::SameConnectionTarget(config, edited));
+        edited = config;
+        edited.cloud_serial = L"OTHER_SN";
+        REQUIRE_TEST(!dji_power::SameConnectionTarget(config, edited));
+        edited = config;
+        edited.cloud_api_host = L"home-api-vg.djigate.com";
+        REQUIRE_TEST(!dji_power::SameConnectionTarget(config, edited));
+        edited = config;
+        edited.mode = dji_power::ConnectionMode::ble;
+        REQUIRE_TEST(!dji_power::SameConnectionTarget(config, edited));
+        auto ble = edited;
+        ble.pair_key = "ABCDEF0123456789ABCDEF0123456789";
+        edited.pair_key = "abcdef0123456789abcdef0123456789";
+        edited.cloud_token = "US_unused-token";
+        REQUIRE_TEST(dji_power::SameConnectionSettings(ble, edited));
+        edited.bluetooth_address = 42;
+        REQUIRE_TEST(!dji_power::SameConnectionTarget(ble, edited));
+        edited = ble;
+        edited.pair_key = "00000000000000000000000000000000";
+        REQUIRE_TEST(!dji_power::SameConnectionTarget(ble, edited));
+    }
     config.cloud_serials = {config.cloud_serial, L"TEST456"};
     config.cloud_tokens = {config.cloud_token};
     for (int index = 0; index < 100; ++index)

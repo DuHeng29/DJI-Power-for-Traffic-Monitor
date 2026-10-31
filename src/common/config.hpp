@@ -24,5 +24,8 @@ std::wstring ModuleDirectory();
 PluginConfig LoadConfig();
 bool SaveConfig(const PluginConfig& config);
 bool IsValidPairKey(const std::string& value);
+// 历史列表、显示名称和未使用通道的凭据不影响当前连接。
+bool SameConnectionSettings(const PluginConfig& left, const PluginConfig& right);
+bool SameConnectionTarget(const PluginConfig& left, const PluginConfig& right);
 } // namespace dji_power
 

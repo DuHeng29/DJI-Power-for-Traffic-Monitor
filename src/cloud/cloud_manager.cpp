@@ -10,6 +10,7 @@
 #include <winrt/Windows.Web.Http.Headers.h>
 #include <winrt/Windows.Web.Http.Filters.h>
 #include <algorithm>
+#include <atomic>
 #include <condition_variable>
 #include <mutex>
 #include <thread>
@@ -66,6 +67,7 @@ struct CloudManager::Impl {
     std::condition_variable condition;
     std::jthread worker;
     bool requested{};
+    std::atomic<bool> auto_reconnect{true};
     TelemetryStore store;
     void Stop() {
         if (!worker.joinable()) return;
@@ -182,7 +184,7 @@ struct CloudManager::Impl {
                     } catch (const std::exception& error) {
                         store.SetStatus(ConnectionState::error, winrt::to_hstring(error.what()).c_str());
                     }
-                    if (!config.auto_reconnect) break;
+                    if (!auto_reconnect) break;
                     std::unique_lock lock(mutex);
                     condition.wait_for(lock, std::chrono::seconds(retry), [&] { return token.stop_requested() || requested; });
                     requested = false; retry = std::min(retry * 2, 30);
@@ -201,9 +203,11 @@ void CloudManager::Reconfigure(const PluginConfig& config) {
     std::wstring error;
     if (!cloud::ValidateConfig(config, error)) { impl_->store.SetStatus(ConnectionState::error, error); return; }
     { std::scoped_lock lock(impl_->mutex); impl_->requested = config.auto_connect; }
+    impl_->auto_reconnect = config.auto_reconnect;
     impl_->store.SetStatus(ConnectionState::stopped, L"DJI Cloud 等待连接");
     impl_->worker = std::jthread([this, config](std::stop_token token) { impl_->Run(config, token); });
 }
 void CloudManager::ConnectNow() { std::scoped_lock lock(impl_->mutex); impl_->requested = true; impl_->condition.notify_all(); }
+void CloudManager::UpdatePolicy(const PluginConfig& config) { impl_->auto_reconnect = config.auto_reconnect; }
 TelemetrySnapshot CloudManager::Snapshot() const { return impl_->store.Get(); }
 } // namespace dji_power

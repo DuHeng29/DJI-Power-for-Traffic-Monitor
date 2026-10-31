@@ -218,8 +218,22 @@ void CALLBACK CheckWindow(HWND, UINT, UINT_PTR timer, DWORD) {
         CheckGroupBackground(window);
     }
     checked = true;
-    // 直接销毁测试窗口，避免“取消”恢复配置的动作启动真实监控。
-    DestroyWindow(window);
+    // 所有编辑都未测试、未应用：“取消”必须直接退出，不得启动或重连后台。
+    SendMessageW(window, WM_COMMAND, MAKEWPARAM(IDCANCEL, BN_CLICKED), 0);
+}
+void CALLBACK CloseUnchanged(HWND, UINT, UINT_PTR timer, DWORD) {
+    HWND window = nullptr;
+    EnumThreadWindows(GetCurrentThreadId(), [](HWND candidate, LPARAM value) -> BOOL {
+        wchar_t name[128]{};
+        GetClassNameW(candidate, name, 128);
+        if (std::wstring(name) == L"DJIPowerOptionsWindowV2") {
+            *reinterpret_cast<HWND*>(value) = candidate; return FALSE;
+        }
+        return TRUE;
+    }, reinterpret_cast<LPARAM>(&window));
+    if (!window) return;
+    KillTimer(nullptr, timer);
+    SendMessageW(window, WM_CLOSE, 0, 0);
 }
 } // namespace
 int wmain(int argc, wchar_t** argv) {
@@ -228,11 +242,24 @@ int wmain(int argc, wchar_t** argv) {
     REQUIRE_TEST(module != nullptr);
     const auto entry = reinterpret_cast<ITMPlugin*(*)()>(GetProcAddress(module, "TMPluginGetInstance"));
     REQUIRE_TEST(entry != nullptr);
+    auto* plugin = entry();
+    plugin->DataRequired();
+    const std::wstring before = plugin->GetTooltipInfo();
     const auto timer = SetTimer(nullptr, 0, 100, CheckWindow);
     REQUIRE_TEST(timer != 0);
-    entry()->ShowOptionsDialog(nullptr);
+    plugin->ShowOptionsDialog(nullptr);
     KillTimer(nullptr, timer);
     REQUIRE_TEST(checked);
+    Sleep(100);
+    plugin->DataRequired();
+    REQUIRE_TEST(std::wstring(plugin->GetTooltipInfo()) == before);
+    const auto close_timer = SetTimer(nullptr, 0, 100, CloseUnchanged);
+    REQUIRE_TEST(close_timer != 0);
+    plugin->ShowOptionsDialog(nullptr);
+    KillTimer(nullptr, close_timer);
+    Sleep(100);
+    plugin->DataRequired();
+    REQUIRE_TEST(std::wstring(plugin->GetTooltipInfo()) == before);
     FreeLibrary(module);
     return 0;
 }

@@ -176,7 +176,7 @@ private:
 
 class OptionsWindow {
 public:
-    explicit OptionsWindow(HWND parent) : parent_(parent), original_(LoadConfig()), editing_(original_) {}
+    explicit OptionsWindow(HWND parent) : parent_(parent), original_(LoadConfig()), editing_(original_), applied_(original_) {}
 
     bool Show() {
         WNDCLASSW window_class{};
@@ -234,11 +234,20 @@ private:
     UINT dpi_{96};
     PluginConfig original_;
     PluginConfig editing_;
+    PluginConfig applied_;
     std::vector<DiscoveredDevice> devices_;
     std::size_t known_device_count_{static_cast<std::size_t>(-1)};
     bool changed_{};
     bool accepted_{};
     bool device_cleared_{};
+
+    void ApplyConfig(const PluginConfig& config) {
+        // 对比实际应用过的配置：未测试的编辑无需回滚，测试成功后按确定也无需再次断线。
+        if (SameConnectionSettings(applied_, config)) return;
+        if (SameConnectionTarget(applied_, config)) MonitorManager::Instance().UpdatePolicy(config);
+        else MonitorManager::Instance().Reconfigure(config);
+        applied_ = config;
+    }
 
     int Scale(int value) const { return MulDiv(value, static_cast<int>(dpi_), 96); }
 
@@ -693,14 +702,14 @@ private:
                 changed_ = true;
                 RefreshKeys({});
                 SendMessageW(device_, CB_SETCURSEL, static_cast<WPARAM>(-1), 0);
-                MonitorManager::Instance().Reconfigure(cleared);
+                ApplyConfig(cleared);
                 return 0;
             }
             case IDC_TEST:
                 if (ReadForm(true)) {
                     auto test = editing_;
                     test.auto_connect = true;
-                    MonitorManager::Instance().Reconfigure(test);
+                    ApplyConfig(test);
                     MonitorManager::Instance().ConnectNow();
                 }
                 return 0;
@@ -709,12 +718,12 @@ private:
                     changed_ = SaveConfig(editing_);
                     if (!changed_) { MessageBoxW(hwnd_, L"保存配置失败。", L"DJI Power", MB_ICONERROR); return 0; }
                     accepted_ = true;
-                    MonitorManager::Instance().Reconfigure(editing_);
+                    ApplyConfig(editing_);
                     DestroyWindow(hwnd_);
                 }
                 return 0;
             case IDCANCEL:
-                MonitorManager::Instance().Reconfigure(original_);
+                ApplyConfig(original_);
                 DestroyWindow(hwnd_);
                 return 0;
             default:
@@ -722,7 +731,7 @@ private:
             }
             break;
         case WM_CLOSE:
-            if (!accepted_) MonitorManager::Instance().Reconfigure(original_);
+            if (!accepted_) ApplyConfig(original_);
             DestroyWindow(hwnd_);
             return 0;
         case WM_DESTROY:
