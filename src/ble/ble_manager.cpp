@@ -42,6 +42,15 @@ std::wstring AddressText(std::uint64_t value) {
         (value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF);
     return text;
 }
+std::wstring GattStatusText(gatt::GattCommunicationStatus status) {
+    switch (status) {
+    case gatt::GattCommunicationStatus::Success: return L"成功";
+    case gatt::GattCommunicationStatus::Unreachable: return L"设备不可达";
+    case gatt::GattCommunicationStatus::ProtocolError: return L"GATT 协议错误";
+    case gatt::GattCommunicationStatus::AccessDenied: return L"访问被拒绝";
+    default: return L"状态码 " + std::to_wstring(static_cast<int>(status));
+    }
+}
 std::wstring ModelName(std::uint8_t code) {
     switch (code) {
     case 0x91: return L"DJI Power 1000";
@@ -120,6 +129,7 @@ struct BleManager::Impl {
     std::optional<duml::Packet> response;
     std::uint16_t sequence{0x1000};
     duml::StreamDecoder decoder;
+    std::wstring connection_stage;
 
     adv::BluetoothLEAdvertisementWatcher watcher{nullptr};
     bt::BluetoothLEDevice device{nullptr};
@@ -196,7 +206,8 @@ struct BleManager::Impl {
             store.Update(value);
         }
     }
-    std::optional<duml::Packet> Request(std::uint8_t command, std::vector<std::uint8_t> payload, std::chrono::seconds timeout = 8s) {
+    std::optional<duml::Packet> Request(std::uint8_t command, std::vector<std::uint8_t> payload,
+                                        std::chrono::seconds timeout = 8s, std::wstring* failure = nullptr) {
         const auto current_sequence = ++sequence;
         {
             std::scoped_lock lock(response_mutex);
@@ -204,28 +215,46 @@ struct BleManager::Impl {
         }
         const auto bytes = duml::Encode({0x02, 0xAB, current_sequence, 0x20, 0x5A, command, std::move(payload)});
         const auto result = write_characteristic.WriteValueAsync(ToBuffer(bytes), gatt::GattWriteOption::WriteWithResponse).get();
-        if (result != gatt::GattCommunicationStatus::Success) return std::nullopt;
+        if (result != gatt::GattCommunicationStatus::Success) {
+            if (failure) *failure = L"写入失败：" + GattStatusText(result);
+            return std::nullopt;
+        }
         std::unique_lock lock(response_mutex);
         const auto matched = response_condition.wait_for(lock, timeout, [&] {
             return response && response->sequence == current_sequence && response->command_set == 0x5A && response->command_id == command;
         });
+        if (!matched && failure) *failure = L"等待设备响应超时";
         return matched ? response : std::nullopt;
+    }
+    bool Fail(std::wstring message) {
+        store.SetStatus(ConnectionState::error, std::move(message));
+        return false;
     }
     bool Authenticate(const std::string& pair_key) {
         store.SetStatus(ConnectionState::authenticating, L"正在验证 Pair Key");
-        const auto challenge = Request(0x6A, {0x00});
-        if (!challenge || challenge->payload.size() < 5 || challenge->payload[0] != 0) return false;
+        std::wstring failure;
+        connection_stage = L"获取鉴权挑战";
+        const auto challenge = Request(0x6A, {0x00}, 8s, &failure);
+        if (!challenge) return Fail(connection_stage + L"失败：" + failure);
+        if (challenge->payload.empty()) return Fail(L"获取鉴权挑战失败：响应为空");
+        if (challenge->payload[0] != 0) return Fail(L"设备拒绝鉴权挑战（状态码 " + std::to_wstring(challenge->payload[0]) + L"）");
+        if (challenge->payload.size() < 5) return Fail(L"获取鉴权挑战失败：响应长度不足");
         std::vector<std::uint8_t> material{0x01};
         material.insert(material.end(), challenge->payload.begin() + 1, challenge->payload.begin() + 5);
         material.insert(material.end(), pair_key.begin(), pair_key.end());
         material.push_back(0);
-        const auto answer = Request(0x6A, std::move(material));
-        return answer && !answer->payload.empty() && answer->payload[0] == 0;
+        connection_stage = L"提交 Pair Key 验证";
+        const auto answer = Request(0x6A, std::move(material), 8s, &failure);
+        if (!answer) return Fail(connection_stage + L"失败：" + failure);
+        if (answer->payload.empty()) return Fail(L"Pair Key 验证失败：响应为空");
+        if (answer->payload[0] != 0) return Fail(L"设备拒绝 Pair Key 验证（状态码 " + std::to_wstring(answer->payload[0]) + L"）");
+        return true;
     }
     bool Connect(std::uint64_t address, const std::string& pair_key) {
         store.SetStatus(ConnectionState::connecting, L"正在连接 " + AddressText(address));
+        connection_stage = L"打开蓝牙设备";
         device = bt::BluetoothLEDevice::FromBluetoothAddressAsync(address).get();
-        if (!device) return false;
+        if (!device) return Fail(L"打开蓝牙设备失败：未找到设备");
         connection_token = device.ConnectionStatusChanged([this](auto const& sender, auto const&) {
             if (sender.ConnectionStatus() == bt::BluetoothConnectionStatus::Disconnected) {
                 std::scoped_lock lock(mutex);
@@ -233,23 +262,33 @@ struct BleManager::Impl {
                 condition.notify_all();
             }
         });
+        connection_stage = L"发现蓝牙服务";
         const auto services = device.GetGattServicesForUuidAsync(winrt::guid(duml::kServiceUuid), bt::BluetoothCacheMode::Uncached).get();
-        if (services.Status() != gatt::GattCommunicationStatus::Success || services.Services().Size() == 0) return false;
+        if (services.Status() != gatt::GattCommunicationStatus::Success) return Fail(connection_stage + L"失败：" + GattStatusText(services.Status()));
+        if (services.Services().Size() == 0) return Fail(L"未找到 DJI Power 蓝牙服务");
         const auto service = services.Services().GetAt(0);
+        connection_stage = L"发现写入特征";
         const auto writes = service.GetCharacteristicsForUuidAsync(winrt::guid(duml::kWriteUuid), bt::BluetoothCacheMode::Uncached).get();
+        if (writes.Status() != gatt::GattCommunicationStatus::Success) return Fail(connection_stage + L"失败：" + GattStatusText(writes.Status()));
+        if (writes.Characteristics().Size() == 0) return Fail(L"未找到蓝牙写入特征");
+        connection_stage = L"发现通知特征";
         const auto notifies = service.GetCharacteristicsForUuidAsync(winrt::guid(duml::kNotifyUuid), bt::BluetoothCacheMode::Uncached).get();
-        if (writes.Status() != gatt::GattCommunicationStatus::Success || notifies.Status() != gatt::GattCommunicationStatus::Success || writes.Characteristics().Size() == 0 || notifies.Characteristics().Size() == 0) return false;
+        if (notifies.Status() != gatt::GattCommunicationStatus::Success) return Fail(connection_stage + L"失败：" + GattStatusText(notifies.Status()));
+        if (notifies.Characteristics().Size() == 0) return Fail(L"未找到蓝牙通知特征");
         write_characteristic = writes.Characteristics().GetAt(0);
         notify_characteristic = notifies.Characteristics().GetAt(0);
         value_token = notify_characteristic.ValueChanged([this](auto const&, const gatt::GattValueChangedEventArgs& args) { HandleValue(args); });
+        connection_stage = L"订阅蓝牙通知";
         const auto subscribe = notify_characteristic.WriteClientCharacteristicConfigurationDescriptorAsync(gatt::GattClientCharacteristicConfigurationDescriptorValue::Notify).get();
-        if (subscribe != gatt::GattCommunicationStatus::Success || !Authenticate(pair_key)) return false;
+        if (subscribe != gatt::GattCommunicationStatus::Success) return Fail(connection_stage + L"失败：" + GattStatusText(subscribe));
+        if (!Authenticate(pair_key)) return false;
         auto value = store.Get();
         value.connection = ConnectionState::connected;
         value.device_name = device.Name().empty() ? AddressText(address) : std::wstring(device.Name());
         value.status = L"已连接，等待遥测";
         store.Update(value);
         // 请求两个只读配置模块；周期性 0x61 推送随后会更新展示字段。
+        connection_stage = L"读取设备配置";
         Request(0x60, {0x00, 0x01, 0x10});
         Request(0x60, {0x00, 0x04, 0x10});
         return true;
@@ -291,11 +330,10 @@ struct BleManager::Impl {
                 link_lost = false;
                 bool connected = false;
                 try { connected = Connect(address, current.pair_key); }
-                catch (const winrt::hresult_error& error) { store.SetStatus(ConnectionState::error, L"BLE 错误：" + std::wstring(error.message())); }
-                catch (...) { store.SetStatus(ConnectionState::error, L"BLE 连接失败"); }
+                catch (const winrt::hresult_error& error) { store.SetStatus(ConnectionState::error, connection_stage + L"失败：" + std::wstring(error.message())); }
+                catch (...) { store.SetStatus(ConnectionState::error, connection_stage + L"失败：未知错误"); }
                 if (!connected) {
                     Disconnect();
-                    store.SetStatus(ConnectionState::error, L"连接或 Pair Key 验证失败");
                     std::this_thread::sleep_for(std::chrono::seconds(retry_seconds));
                     retry_seconds = std::min(retry_seconds * 2, 30);
                     continue;
