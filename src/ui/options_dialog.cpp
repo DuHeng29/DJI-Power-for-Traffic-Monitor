@@ -358,9 +358,9 @@ private:
         Add(L"BUTTON", L"+", BS_PUSHBUTTON | WS_TABSTOP, 518, 127, 26, 26, IDC_ADD_CLOUD_TOKEN);
         cloud_region_ = Add(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | WS_TABSTOP,
             105, 158, 439, 140, IDC_CLOUD_REGION);
-        const wchar_t* regions[] = {L"海外 VG · home-api-vg.djigate.com", L"国内 HZ · home-api-hz.djigate.com", L"默认 · home-api.djigate.com"};
+        const wchar_t* regions[] = {L"默认 · home-api.djigate.com", L"国内 HZ · home-api-hz.djigate.com", L"海外 VG · home-api-vg.djigate.com"};
         for (const auto* region : regions) SendMessageW(cloud_region_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(region));
-        const int region = editing_.cloud_api_host == L"home-api-hz.djigate.com" ? 1 : editing_.cloud_api_host == L"home-api.djigate.com" ? 2 : 0;
+        const int region = editing_.cloud_api_host == L"home-api-hz.djigate.com" ? 1 : editing_.cloud_api_host == L"home-api-vg.djigate.com" ? 2 : 0;
         SendMessageW(cloud_region_, CB_SETCURSEL, region, 0);
 
         const auto auto_connect = Add(L"BUTTON", L"启动后自动连接",
@@ -489,7 +489,7 @@ private:
         if (editing_.mode == ConnectionMode::cloud) {
             ReadCloudSelection();
             const auto region = SendMessageW(cloud_region_, CB_GETCURSEL, 0, 0);
-            editing_.cloud_api_host = region == 1 ? L"home-api-hz.djigate.com" : region == 2 ? L"home-api.djigate.com" : L"home-api-vg.djigate.com";
+            editing_.cloud_api_host = region == 1 ? L"home-api-hz.djigate.com" : region == 2 ? L"home-api-vg.djigate.com" : L"home-api.djigate.com";
             if (allow_empty_key && editing_.cloud_token.empty()) return true;
             std::wstring error;
             if (!cloud::ValidateConfig(editing_, error)) {

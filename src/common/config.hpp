@@ -12,7 +12,7 @@ struct PluginConfig {
     std::wstring cloud_serial;
     std::vector<std::string> cloud_tokens;
     std::vector<std::wstring> cloud_serials;
-    std::wstring cloud_api_host{L"home-api-vg.djigate.com"};
+    std::wstring cloud_api_host{L"home-api.djigate.com"};
     std::uint64_t bluetooth_address{};
     std::wstring device_name;
     std::string pair_key;

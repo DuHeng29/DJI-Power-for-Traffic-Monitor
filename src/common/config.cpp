@@ -113,7 +113,7 @@ PluginConfig LoadConfig() {
         offset = end + 1;
     }
     AppendUnique(result.cloud_serials, result.cloud_serial);
-    result.cloud_api_host = ReadIni(L"cloud_api_host", L"home-api-vg.djigate.com");
+    result.cloud_api_host = ReadIni(L"cloud_api_host", L"home-api.djigate.com");
     result.device_name = ReadIni(L"device_name");
     result.auto_connect = ReadIni(L"auto_connect", L"1") != L"0";
     result.auto_reconnect = ReadIni(L"auto_reconnect", L"1") != L"0";
