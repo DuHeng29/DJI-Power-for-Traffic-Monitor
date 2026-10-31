@@ -2,12 +2,14 @@
 #pragma once
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace dji_power {
 struct PluginConfig {
     std::uint64_t bluetooth_address{};
     std::wstring device_name;
     std::string pair_key;
+    std::vector<std::string> pair_keys;
     bool auto_connect{true};
     bool auto_reconnect{true};
 };

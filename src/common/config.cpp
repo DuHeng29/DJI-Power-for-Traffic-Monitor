@@ -61,6 +61,14 @@ PluginConfig LoadConfig() {
     try { result.bluetooth_address = std::stoull(ReadIni(L"bluetooth_address", L"0"), nullptr, 16); } catch (...) { result.bluetooth_address = 0; }
     result.pair_key = Unprotect(ReadIni(L"pair_key_dpapi"));
     if (!IsValidPairKey(result.pair_key)) result.pair_key.clear();
+    const auto keys = Unprotect(ReadIni(L"pair_keys_dpapi"));
+    for (std::size_t offset = 0; offset + 32 <= keys.size(); offset += 32) {
+        const auto key = keys.substr(offset, 32);
+        if (IsValidPairKey(key) && std::find(result.pair_keys.begin(), result.pair_keys.end(), key) == result.pair_keys.end())
+            result.pair_keys.push_back(key);
+    }
+    if (!result.pair_key.empty() && std::find(result.pair_keys.begin(), result.pair_keys.end(), result.pair_key) == result.pair_keys.end())
+        result.pair_keys.push_back(result.pair_key);
     return result;
 }
 bool SaveConfig(const PluginConfig& config) {
@@ -68,9 +76,14 @@ bool SaveConfig(const PluginConfig& config) {
     wchar_t address[17]{};
     swprintf_s(address, L"%012llX", static_cast<unsigned long long>(config.bluetooth_address));
     const auto secret = Protect(config.pair_key);
+    std::string keys;
+    for (const auto& key : config.pair_keys) if (IsValidPairKey(key)) keys += key;
+    const auto secrets = Protect(keys);
+    if ((!config.pair_key.empty() && secret.empty()) || (!keys.empty() && secrets.empty())) return false;
     return WritePrivateProfileStringW(L"connection", L"device_name", config.device_name.c_str(), path.c_str()) &&
            WritePrivateProfileStringW(L"connection", L"bluetooth_address", address, path.c_str()) &&
            WritePrivateProfileStringW(L"connection", L"pair_key_dpapi", secret.c_str(), path.c_str()) &&
+           WritePrivateProfileStringW(L"connection", L"pair_keys_dpapi", secrets.c_str(), path.c_str()) &&
            WritePrivateProfileStringW(L"connection", L"auto_connect", config.auto_connect ? L"1" : L"0", path.c_str()) &&
            WritePrivateProfileStringW(L"connection", L"auto_reconnect", config.auto_reconnect ? L"1" : L"0", path.c_str());
 }

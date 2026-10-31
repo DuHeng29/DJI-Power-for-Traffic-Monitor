@@ -9,6 +9,7 @@
 #include <commctrl.h>
 #include <uxtheme.h>
 #include <array>
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -24,12 +25,114 @@ enum : int {
     IDC_DEVICE,
     IDC_SCAN,
     IDC_PAIR_KEY,
+    IDC_DELETE_KEY,
+    IDC_ADD_KEY,
     IDC_GET_KEY,
     IDC_AUTO_CONNECT,
     IDC_AUTO_RECONNECT,
+    IDC_CLEAR,
     IDC_STATUS,
     IDC_VALUES,
-    IDC_TEST
+    IDC_TEST,
+    IDC_KEY_INPUT
+};
+
+class KeyInputWindow {
+public:
+    std::string Show(HWND parent) {
+        WNDCLASSW wc{};
+        wc.lpfnWndProc = WndProc;
+        wc.hInstance = g_module;
+        wc.lpszClassName = L"DJIPowerKeyInputWindow";
+        wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+        wc.hbrBackground = GetSysColorBrush(COLOR_WINDOW);
+        RegisterClassW(&wc);
+        hwnd_ = CreateWindowExW(WS_EX_DLGMODALFRAME, wc.lpszClassName, L"添加 Pair Key",
+            WS_CAPTION | WS_SYSMENU | WS_POPUP, CW_USEDEFAULT, CW_USEDEFAULT,
+            430, 150, parent, nullptr, g_module, this);
+        if (!hwnd_) return {};
+        EnableWindow(parent, FALSE);
+        RECT parent_rect{}, window_rect{};
+        GetWindowRect(parent, &parent_rect);
+        GetWindowRect(hwnd_, &window_rect);
+        SetWindowPos(hwnd_, nullptr,
+            parent_rect.left + ((parent_rect.right - parent_rect.left) - (window_rect.right - window_rect.left)) / 2,
+            parent_rect.top + ((parent_rect.bottom - parent_rect.top) - (window_rect.bottom - window_rect.top)) / 2,
+            0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        ShowWindow(hwnd_, SW_SHOW);
+        SetFocus(input_);
+        MSG message{};
+        while (IsWindow(hwnd_) && GetMessageW(&message, nullptr, 0, 0) > 0) {
+            if (!IsDialogMessageW(hwnd_, &message)) { TranslateMessage(&message); DispatchMessageW(&message); }
+        }
+        EnableWindow(parent, TRUE);
+        SetForegroundWindow(parent);
+        return key_;
+    }
+private:
+    HWND hwnd_{};
+    HWND input_{};
+    HFONT font_{};
+    HFONT bold_font_{};
+    UINT dpi_{96};
+    std::string key_;
+    static LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wp, LPARAM lp) {
+        auto* self = reinterpret_cast<KeyInputWindow*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+        if (message == WM_NCCREATE) {
+            self = static_cast<KeyInputWindow*>(reinterpret_cast<CREATESTRUCTW*>(lp)->lpCreateParams);
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
+        }
+        if (!self) return DefWindowProcW(hwnd, message, wp, lp);
+        if (message == WM_CREATE) {
+            self->dpi_ = GetDpiForWindow(hwnd);
+            const auto scale = [&](int value) { return MulDiv(value, static_cast<int>(self->dpi_), 96); };
+            const auto create_font = [&](int weight) {
+                return CreateFontW(-MulDiv(9, static_cast<int>(self->dpi_), 72), 0, 0, 0, weight,
+                    FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                    CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+            };
+            self->font_ = create_font(FW_NORMAL);
+            self->bold_font_ = create_font(FW_SEMIBOLD);
+            RECT desired{0, 0, scale(440), scale(150)};
+            AdjustWindowRectExForDpi(&desired, WS_CAPTION | WS_SYSMENU | WS_POPUP,
+                FALSE, WS_EX_DLGMODALFRAME, self->dpi_);
+            SetWindowPos(hwnd, nullptr, 0, 0, desired.right - desired.left, desired.bottom - desired.top,
+                SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+            const auto add = [&](const wchar_t* type, const wchar_t* text, DWORD style, int x, int y, int w, int h, int id, HFONT font = nullptr) {
+                const auto c = CreateWindowExW(0, type, text, WS_CHILD | WS_VISIBLE | style, scale(x), scale(y), scale(w), scale(h), hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), g_module, nullptr);
+                SendMessageW(c, WM_SETFONT, reinterpret_cast<WPARAM>(font ? font : self->font_), TRUE);
+                SetWindowTheme(c, L"Explorer", nullptr);
+                return c;
+            };
+            add(L"BUTTON", L"Pair Key", BS_GROUPBOX, 12, 10, 416, 82, 0, self->bold_font_);
+            add(L"STATIC", L"请输入 32 位十六进制 Pair Key：", SS_LEFT, 28, 29, 380, 20, 0);
+            self->input_ = add(L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 28, 53, 380, 24, IDC_KEY_INPUT);
+            SendMessageW(self->input_, EM_SETLIMITTEXT, 32, 0);
+            add(L"BUTTON", L"确定", BS_DEFPUSHBUTTON | WS_TABSTOP, 260, 108, 76, 27, IDOK);
+            add(L"BUTTON", L"取消", BS_PUSHBUTTON | WS_TABSTOP, 344, 108, 76, 27, IDCANCEL);
+            SetFocus(self->input_);
+            return 0;
+        }
+        if (message == WM_COMMAND && LOWORD(wp) == IDOK && HIWORD(wp) == BN_CLICKED) {
+            std::array<char, 64> key{};
+            GetWindowTextA(self->input_, key.data(), static_cast<int>(key.size()));
+            try { self->key_ = duml::NormalizePairKey(key.data()); }
+            catch (...) { MessageBoxW(hwnd, L"Pair Key 必须是 32 个十六进制字符。", L"DJI Power", MB_ICONWARNING); return 0; }
+            DestroyWindow(hwnd); return 0;
+        }
+        if (message == WM_CLOSE || (message == WM_COMMAND && LOWORD(wp) == IDCANCEL && HIWORD(wp) == BN_CLICKED)) { DestroyWindow(hwnd); return 0; }
+        if (message == WM_CTLCOLORSTATIC) {
+            SetBkMode(reinterpret_cast<HDC>(wp), TRANSPARENT);
+            return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_WINDOW));
+        }
+        if (message == WM_DESTROY) {
+            DeleteObject(self->font_);
+            DeleteObject(self->bold_font_);
+            return 0;
+        }
+        return DefWindowProcW(hwnd, message, wp, lp);
+    }
 };
 
 class OptionsWindow {
@@ -92,6 +195,7 @@ private:
     std::size_t known_device_count_{static_cast<std::size_t>(-1)};
     bool changed_{};
     bool accepted_{};
+    bool device_cleared_{};
 
     int Scale(int value) const { return MulDiv(value, static_cast<int>(dpi_), 96); }
 
@@ -113,6 +217,16 @@ private:
         SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font ? font : font_), TRUE);
         SetWindowTheme(control, L"Explorer", nullptr);
         return control;
+    }
+
+    void SetComboHeight(HWND combo, int height) {
+        // 调整折叠状态的选择区域，并为下拉列表保留适合字体的行高。
+        RECT rect{};
+        GetWindowRect(combo, &rect);
+        const auto item_height = static_cast<int>(SendMessageW(combo, CB_GETITEMHEIGHT, static_cast<WPARAM>(-1), 0));
+        const auto adjusted_height = std::max(1, item_height + Scale(height) - static_cast<int>(rect.bottom - rect.top));
+        SendMessageW(combo, CB_SETITEMHEIGHT, static_cast<WPARAM>(-1), adjusted_height);
+        SendMessageW(combo, CB_SETITEMHEIGHT, 0, Scale(20));
     }
 
     void CreateFonts() {
@@ -149,14 +263,17 @@ private:
 
         Add(L"BUTTON", L"设备与凭据", BS_GROUPBOX, 12, 66, 546, 156, 0, bold_font_);
         Add(L"STATIC", L"设备：", SS_LEFT, 28, 96, 70, 20);
-        device_ = Add(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL,
-            105, 92, 335, 180, IDC_DEVICE);
+        device_ = Add(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_TABSTOP | WS_VSCROLL,
+            105, 91, 335, 180, IDC_DEVICE);
+        SetComboHeight(device_, 26);
         Add(L"BUTTON", L"重新扫描", BS_PUSHBUTTON | WS_TABSTOP, 449, 91, 95, 26, IDC_SCAN);
 
         Add(L"STATIC", L"Pair Key：", SS_LEFT, 28, 132, 70, 20);
-        pair_ = Add(L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP,
-            105, 128, 335, 24, IDC_PAIR_KEY);
-        SendMessageW(pair_, EM_SETPASSWORDCHAR, L'●', 0);
+        pair_ = Add(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_TABSTOP | WS_VSCROLL,
+            105, 127, 267, 160, IDC_PAIR_KEY);
+        SetComboHeight(pair_, 26);
+        Add(L"BUTTON", L"×", BS_PUSHBUTTON | WS_TABSTOP, 381, 127, 26, 26, IDC_DELETE_KEY);
+        Add(L"BUTTON", L"+", BS_PUSHBUTTON | WS_TABSTOP, 414, 127, 26, 26, IDC_ADD_KEY);
         Add(L"BUTTON", L"账号登录", BS_PUSHBUTTON | WS_TABSTOP, 449, 127, 95, 26, IDC_GET_KEY);
 
         Add(L"STATIC", L"登录信息和临时 Token 仅保存在内存中，获取完成后立即清除。",
@@ -166,6 +283,7 @@ private:
             BS_AUTOCHECKBOX | WS_TABSTOP, 28, 190, 155, 22, IDC_AUTO_CONNECT);
         const auto auto_reconnect = Add(L"BUTTON", L"断线自动重连",
             BS_AUTOCHECKBOX | WS_TABSTOP, 205, 190, 150, 22, IDC_AUTO_RECONNECT);
+        Add(L"BUTTON", L"清空设备和 Key", BS_PUSHBUTTON | WS_TABSTOP, 374, 188, 170, 26, IDC_CLEAR);
         SendMessageW(auto_connect, BM_SETCHECK, editing_.auto_connect ? BST_CHECKED : BST_UNCHECKED, 0);
         SendMessageW(auto_reconnect, BM_SETCHECK, editing_.auto_reconnect ? BST_CHECKED : BST_UNCHECKED, 0);
 
@@ -181,9 +299,28 @@ private:
         Add(L"BUTTON", L"取消", BS_PUSHBUTTON | WS_TABSTOP,
             474, 313, 76, 27, IDCANCEL);
 
-        SetWindowTextA(pair_, editing_.pair_key.c_str());
+        RefreshKeys(editing_.pair_key);
         RefreshDevices();
         SetTimer(hwnd_, 1, 400, nullptr);
+    }
+
+    void RefreshKeys(const std::string& selected) {
+        SendMessageW(pair_, CB_RESETCONTENT, 0, 0);
+        int selected_index = -1;
+        for (std::size_t i = 0; i < editing_.pair_keys.size(); ++i) {
+            const auto& key = editing_.pair_keys[i];
+            const std::wstring label(key.begin(), key.begin() + 8);
+            const auto text = label + L"…";
+            SendMessageW(pair_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(text.c_str()));
+            if (key == selected) selected_index = static_cast<int>(i);
+        }
+        SendMessageW(pair_, CB_SETCURSEL, selected_index, 0);
+    }
+    void AddKey(const std::string& key) {
+        if (std::find(editing_.pair_keys.begin(), editing_.pair_keys.end(), key) == editing_.pair_keys.end())
+            editing_.pair_keys.push_back(key);
+        editing_.pair_key = key;
+        RefreshKeys(key);
     }
 
     void RefreshDevices() {
@@ -205,23 +342,25 @@ private:
             SendMessageW(device_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
             if (devices_[index].address == selected_address) selected = static_cast<int>(index);
         }
-        if (selected < 0) selected = 0;
+        if (selected < 0 && !device_cleared_) selected = 0;
         SendMessageW(device_, CB_SETCURSEL, selected, 0);
     }
 
-    bool ReadForm(bool show_error) {
-        std::array<char, 128> key{};
-        GetWindowTextA(pair_, key.data(), static_cast<int>(key.size()));
-        try {
-            editing_.pair_key = duml::NormalizePairKey(key.data());
-        } catch (...) {
-            if (show_error) MessageBoxW(hwnd_, L"Pair Key 必须是 32 个十六进制字符。", L"DJI Power", MB_ICONWARNING);
-            return false;
+    bool ReadForm(bool show_error, bool allow_empty_key = false) {
+        const auto key_index = static_cast<int>(SendMessageW(pair_, CB_GETCURSEL, 0, 0));
+        if (key_index < 0 || static_cast<std::size_t>(key_index) >= editing_.pair_keys.size()) {
+            if (!allow_empty_key) {
+                if (show_error) MessageBoxW(hwnd_, L"请选择或添加 Pair Key。", L"DJI Power", MB_ICONWARNING);
+                return false;
+            }
+            editing_.pair_key.clear();
+        } else {
+            editing_.pair_key = editing_.pair_keys[static_cast<std::size_t>(key_index)];
         }
 
         const auto index = static_cast<int>(SendMessageW(device_, CB_GETCURSEL, 0, 0));
         if (index < 0 || static_cast<std::size_t>(index) >= devices_.size()) {
-            if (editing_.bluetooth_address == 0) {
+            if (editing_.bluetooth_address == 0 && !(allow_empty_key && editing_.pair_key.empty())) {
                 if (show_error) MessageBoxW(hwnd_, L"尚未发现设备。请保持电源开启并点击“重新扫描”。", L"DJI Power", MB_ICONWARNING);
                 return false;
             }
@@ -238,7 +377,7 @@ private:
         // 使用与已验证 Python 工具相同的 DJI Home 移动端登录流程。
         const auto cloud_devices = ShowAccountLoginDialog(hwnd_);
         if (cloud_devices.empty()) return;
-        SetWindowTextA(pair_, cloud_devices.front().pair_key.c_str());
+        AddKey(cloud_devices.front().pair_key);
         editing_.device_name = cloud_devices.front().name;
         const auto message = L"已取得 " + std::to_wstring(cloud_devices.size()) +
             L" 台设备的凭据，当前填入：" + cloud_devices.front().name;
@@ -267,6 +406,30 @@ private:
         case WM_TIMER:
             UpdateStatus();
             return 0;
+        case WM_DRAWITEM: {
+            const auto item = reinterpret_cast<DRAWITEMSTRUCT*>(lp);
+            if (item->CtlID != IDC_DEVICE && item->CtlID != IDC_PAIR_KEY) break;
+            const bool selected = (item->itemState & ODS_SELECTED) != 0;
+            FillRect(item->hDC, &item->rcItem, GetSysColorBrush(selected ? COLOR_HIGHLIGHT : COLOR_WINDOW));
+            if (item->itemID != static_cast<UINT>(-1)) {
+                const auto length = SendMessageW(item->hwndItem, CB_GETLBTEXTLEN, item->itemID, 0);
+                if (length != CB_ERR) {
+                    std::wstring text(static_cast<std::size_t>(length) + 1, L'\0');
+                    SendMessageW(item->hwndItem, CB_GETLBTEXT, item->itemID, reinterpret_cast<LPARAM>(text.data()));
+                    RECT text_rect = item->rcItem;
+                    text_rect.left += Scale(3);
+                    text_rect.right -= Scale(3);
+                    SetBkMode(item->hDC, TRANSPARENT);
+                    SetTextColor(item->hDC, GetSysColor(selected ? COLOR_HIGHLIGHTTEXT : COLOR_WINDOWTEXT));
+                    const auto old_font = SelectObject(item->hDC, font_);
+                    DrawTextW(item->hDC, text.c_str(), static_cast<int>(length), &text_rect,
+                        DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
+                    SelectObject(item->hDC, old_font);
+                }
+            }
+            if (item->itemState & ODS_FOCUS) DrawFocusRect(item->hDC, &item->rcItem);
+            return TRUE;
+        }
         case WM_CTLCOLORSTATIC: {
             const auto dc = reinterpret_cast<HDC>(wp);
             SetBkMode(dc, TRANSPARENT);
@@ -277,6 +440,9 @@ private:
         }
         case WM_COMMAND:
             switch (LOWORD(wp)) {
+            case IDC_DEVICE:
+                if (HIWORD(wp) == CBN_SELCHANGE) device_cleared_ = false;
+                return 0;
             case IDC_SCAN:
                 BleManager::Instance().Rescan();
                 known_device_count_ = static_cast<std::size_t>(-1);
@@ -285,6 +451,40 @@ private:
             case IDC_GET_KEY:
                 FetchKey();
                 return 0;
+            case IDC_ADD_KEY: {
+                const auto key = KeyInputWindow().Show(hwnd_);
+                if (!key.empty()) AddKey(key);
+                return 0;
+            }
+            case IDC_DELETE_KEY: {
+                const auto index = static_cast<int>(SendMessageW(pair_, CB_GETCURSEL, 0, 0));
+                if (index >= 0 && static_cast<std::size_t>(index) < editing_.pair_keys.size()) {
+                    editing_.pair_keys.erase(editing_.pair_keys.begin() + index);
+                    editing_.pair_key = editing_.pair_keys.empty() ? std::string{} :
+                        editing_.pair_keys[std::min(static_cast<std::size_t>(index), editing_.pair_keys.size() - 1)];
+                    RefreshKeys(editing_.pair_key);
+                }
+                return 0;
+            }
+            case IDC_CLEAR: {
+                auto cleared = original_;
+                cleared.bluetooth_address = 0;
+                cleared.device_name.clear();
+                cleared.pair_key.clear();
+                cleared.pair_keys.clear();
+                if (!SaveConfig(cleared)) { MessageBoxW(hwnd_, L"清空配置失败。", L"DJI Power", MB_ICONERROR); return 0; }
+                original_ = cleared;
+                editing_.bluetooth_address = 0;
+                editing_.device_name.clear();
+                editing_.pair_key.clear();
+                editing_.pair_keys.clear();
+                device_cleared_ = true;
+                changed_ = true;
+                RefreshKeys({});
+                SendMessageW(device_, CB_SETCURSEL, static_cast<WPARAM>(-1), 0);
+                BleManager::Instance().Reconfigure(cleared);
+                return 0;
+            }
             case IDC_TEST:
                 if (ReadForm(true)) {
                     auto test = editing_;
@@ -294,8 +494,9 @@ private:
                 }
                 return 0;
             case IDOK:
-                if (ReadForm(true)) {
+                if (ReadForm(true, true)) {
                     changed_ = SaveConfig(editing_);
+                    if (!changed_) { MessageBoxW(hwnd_, L"保存配置失败。", L"DJI Power", MB_ICONERROR); return 0; }
                     accepted_ = true;
                     BleManager::Instance().Reconfigure(editing_);
                     DestroyWindow(hwnd_);
