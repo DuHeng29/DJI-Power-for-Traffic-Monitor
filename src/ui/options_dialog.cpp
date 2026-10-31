@@ -196,6 +196,7 @@ private:
     HWND cloud_serial_{};
     HWND cloud_token_{};
     HWND cloud_region_{};
+    std::vector<HWND> group_boxes_;
     HFONT font_{};
     HFONT title_font_{};
     HFONT bold_font_{};
@@ -220,13 +221,30 @@ private:
         return self ? self->Handle(message, wp, lp) : DefWindowProcW(hwnd, message, wp, lp);
     }
 
+    static LRESULT CALLBACK GroupBoxProc(HWND hwnd, UINT message, WPARAM wp, LPARAM lp,
+                                         UINT_PTR subclass_id, DWORD_PTR) {
+        if (message == WM_ERASEBKGND) {
+            // 父窗口使用 WS_CLIPCHILDREN，无法擦除分组框内部；原生分组框只画边框，需显式清背景。
+            RECT rect{};
+            GetClientRect(hwnd, &rect);
+            FillRect(reinterpret_cast<HDC>(wp), &rect, GetSysColorBrush(COLOR_WINDOW));
+            return TRUE;
+        }
+        if (message == WM_NCDESTROY) RemoveWindowSubclass(hwnd, GroupBoxProc, subclass_id);
+        return DefSubclassProc(hwnd, message, wp, lp);
+    }
+
     HWND Add(const wchar_t* type, const wchar_t* text, DWORD style,
              int x, int y, int width, int height, int id = 0, HFONT font = nullptr) {
-        const auto control = CreateWindowExW(0, type, text, WS_CHILD | WS_VISIBLE | style,
+        const auto control = CreateWindowExW(0, type, text, WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | style,
             Scale(x), Scale(y), Scale(width), Scale(height), hwnd_,
             reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), g_module, nullptr);
         SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font ? font : font_), TRUE);
         SetWindowTheme(control, L"Explorer", nullptr);
+        if (lstrcmpiW(type, L"BUTTON") == 0 && (style & BS_TYPEMASK) == BS_GROUPBOX) {
+            group_boxes_.push_back(control);
+            SetWindowSubclass(control, GroupBoxProc, 1, 0);
+        }
         return control;
     }
 
@@ -323,6 +341,9 @@ private:
         Add(L"BUTTON", L"取消", BS_PUSHBUTTON | WS_TABSTOP,
             474, 313, 76, 27, IDCANCEL);
 
+        // 分组框是背景兄弟窗口，不能位于内部控件上方，否则 WS_CLIPSIBLINGS 会把控件全部裁掉。
+        for (const auto group : group_boxes_)
+            SetWindowPos(group, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         RefreshKeys(editing_.pair_key);
         RefreshDevices();
         UpdateMode();
@@ -331,6 +352,10 @@ private:
 
     void UpdateMode() {
         const bool cloud = editing_.mode == ConnectionMode::cloud;
+        const bool visible = IsWindowVisible(hwnd_) != FALSE;
+        if (visible) SendMessageW(hwnd_, WM_SETREDRAW, FALSE, 0);
+        // 下拉列表是独立弹出窗口，必须先收起；模式切换后统一擦除并重绘所有子控件。
+        for (const auto combo : {device_, pair_, cloud_region_}) SendMessageW(combo, CB_SHOWDROPDOWN, FALSE, 0);
         for (const auto id : {IDC_DEVICE, IDC_PAIR_KEY, IDC_DELETE_KEY, IDC_ADD_KEY, IDC_SUBTITLE})
             ShowWindow(GetDlgItem(hwnd_, id), cloud ? SW_HIDE : SW_SHOW);
         for (const auto id : {IDC_CLOUD_SN, IDC_CLOUD_TOKEN, IDC_CLOUD_REGION})
@@ -338,6 +363,8 @@ private:
         SetDlgItemTextW(hwnd_, IDC_DEVICE_LABEL, cloud ? L"设备 SN：" : L"设备：");
         SetDlgItemTextW(hwnd_, IDC_CREDENTIAL_LABEL, cloud ? L"Token：" : L"Pair Key：");
         SetDlgItemTextW(hwnd_, IDC_SCAN, cloud ? L"登录选设备" : L"重新扫描");
+        if (visible) SendMessageW(hwnd_, WM_SETREDRAW, TRUE, 0);
+        RedrawWindow(hwnd_, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
     }
 
     static std::wstring ReadText(HWND control) {
