@@ -27,7 +27,7 @@ TrafficMonitor → DJIPowerPlugin.dll → Windows BLE → DJI Power
 - Pair Key 使用当前 Windows 用户的 DPAPI 加密保存
 - 原生 Win32 设置界面，支持 DPI 和 ClearType
 - 可选择 DJI Cloud，以 Member Token 换取短期 MQTT 凭据并订阅实时遥测
-- Cloud 支持账号登录选择设备，也支持手工填写完整 Token、SN 和 API 区域
+- Cloud 支持账号登录选择设备，SN 和 Token 可从历史下拉列表选择，SN 支持通过“+”手工添加
 - Cloud Token 使用当前 Windows 用户的 DPAPI 加密保存；短期 MQTT 凭据到期前自动更新
 - Cloud 断线自动退避重连；Token 失效提示重新登录；超过 3 分钟没有遥测时显示未知值
 
@@ -87,9 +87,9 @@ TrafficMonitor → DJIPowerPlugin.dll → Windows BLE → DJI Power
 ### DJI Cloud 模式
 
 1. 在设置中选择“DJI Cloud”。
-2. 点击“账号登录”，完成验证码验证后选择设备，自动填写 Token 和 SN；也可手工填写完整 Member Token（如 `CN_…`、`US_…`）及电源序列号。
+2. 点击上方“登录选设备”，完成验证码验证后选择设备，SN 和 Token 会加入历史下拉列表；也可选择已保存的条目。SN 右侧的“+”可手工添加序列号；Token 右侧的“+”可手工粘贴完整 Member Token，“×”可删除当前选中的 Token。Token 输入框遮罩显示，列表只显示编号和区域，不显示真实凭据。新增或删除后点击“确定”才保存，取消则放弃修改。
 3. 选择 API 区域，默认与参考项目一致为海外 VG；国内账号可尝试国内 HZ。
-4. 点击“测试连接”，确认收到遥测后点击“确定”。保存的 Token 使用 DPAPI 加密；取消设置会恢复原监控方式。
+4. 点击“测试连接”，确认收到遥测后点击“确定”。当前 Token 和 Token 历史均使用 DPAPI 加密；取消设置会恢复原监控方式，未保存的列表修改不会落盘。“清空设备和 Key”会同时清空云端历史列表。
 
 Cloud 模式仅监控所选 SN，不占用本地 BLE 连接。电源必须已在 DJI Home 中联网，且账号可访问该设备。状态显示“已连接，等待设备遥测”只表示 MQTT 订阅成功；收到遥测后才显示数值。退出 DJI Home 账号或令牌失效后，可能需要重新登录。
 

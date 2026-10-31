@@ -10,6 +10,8 @@ struct PluginConfig {
     ConnectionMode mode{ConnectionMode::ble};
     std::string cloud_token;
     std::wstring cloud_serial;
+    std::vector<std::string> cloud_tokens;
+    std::vector<std::wstring> cloud_serials;
     std::wstring cloud_api_host{L"home-api-vg.djigate.com"};
     std::uint64_t bluetooth_address{};
     std::wstring device_name;

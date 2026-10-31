@@ -42,12 +42,17 @@ enum : int {
     IDC_CLOUD_TOKEN,
     IDC_CLOUD_REGION,
     IDC_DEVICE_LABEL,
-    IDC_CREDENTIAL_LABEL
+    IDC_CREDENTIAL_LABEL,
+    IDC_ADD_CLOUD_SN,
+    IDC_DELETE_CLOUD_TOKEN,
+    IDC_ADD_CLOUD_TOKEN
 };
 
 class KeyInputWindow {
 public:
-    std::string Show(HWND parent) {
+    std::string Show(HWND parent, bool serial = false, bool token = false) {
+        serial_ = serial;
+        token_ = token;
         WNDCLASSW wc{};
         wc.lpfnWndProc = WndProc;
         wc.hInstance = g_module;
@@ -55,7 +60,7 @@ public:
         wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
         wc.hbrBackground = GetSysColorBrush(COLOR_WINDOW);
         RegisterClassW(&wc);
-        hwnd_ = CreateWindowExW(WS_EX_DLGMODALFRAME, wc.lpszClassName, L"添加 Pair Key",
+        hwnd_ = CreateWindowExW(WS_EX_DLGMODALFRAME, wc.lpszClassName, token ? L"添加 Cloud Token" : serial ? L"添加设备 SN" : L"添加 Pair Key",
             WS_CAPTION | WS_SYSMENU | WS_POPUP, CW_USEDEFAULT, CW_USEDEFAULT,
             430, 150, parent, nullptr, g_module, this);
         if (!hwnd_) return {};
@@ -84,6 +89,8 @@ private:
     HFONT bold_font_{};
     UINT dpi_{96};
     std::string key_;
+    bool serial_{};
+    bool token_{};
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wp, LPARAM lp) {
         auto* self = reinterpret_cast<KeyInputWindow*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
         if (message == WM_NCCREATE) {
@@ -113,20 +120,43 @@ private:
                 SetWindowTheme(c, L"Explorer", nullptr);
                 return c;
             };
-            add(L"BUTTON", L"Pair Key", BS_GROUPBOX, 12, 10, 416, 82, 0, self->bold_font_);
-            add(L"STATIC", L"请输入 32 位十六进制 Pair Key：", SS_LEFT, 28, 29, 380, 20, 0);
-            self->input_ = add(L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 28, 53, 380, 24, IDC_KEY_INPUT);
-            SendMessageW(self->input_, EM_SETLIMITTEXT, 32, 0);
+            add(L"BUTTON", self->token_ ? L"Cloud Token" : self->serial_ ? L"设备 SN" : L"Pair Key", BS_GROUPBOX, 12, 10, 416, 82, 0, self->bold_font_);
+            add(L"STATIC", self->token_ ? L"请输入完整 Member Token（例如 CN_…、US_…）：" : self->serial_ ? L"请输入设备序列号 SN：" : L"请输入 32 位十六进制 Pair Key：", SS_LEFT, 28, 29, 380, 20, 0);
+            self->input_ = add(L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP | (self->token_ ? ES_PASSWORD : 0), 28, 53, 380, 24, IDC_KEY_INPUT);
+            SendMessageW(self->input_, EM_SETLIMITTEXT, self->token_ ? 16384 : self->serial_ ? 64 : 32, 0);
             add(L"BUTTON", L"确定", BS_DEFPUSHBUTTON | WS_TABSTOP, 260, 108, 76, 27, IDOK);
             add(L"BUTTON", L"取消", BS_PUSHBUTTON | WS_TABSTOP, 344, 108, 76, 27, IDCANCEL);
             SetFocus(self->input_);
             return 0;
         }
         if (message == WM_COMMAND && LOWORD(wp) == IDOK && HIWORD(wp) == BN_CLICKED) {
-            std::array<char, 64> key{};
+            if (self->token_) {
+                std::wstring text(static_cast<std::size_t>(GetWindowTextLengthW(self->input_)) + 1, L'\0');
+                text.resize(GetWindowTextW(self->input_, text.data(), static_cast<int>(text.size())));
+                PluginConfig validation;
+                validation.cloud_token = winrt::to_string(text);
+                if (!text.empty()) SecureZeroMemory(text.data(), text.size() * sizeof(wchar_t));
+                validation.cloud_serial = L"VALIDATION_ONLY"; // 这里只验证 Token，不进行网络操作。
+                std::wstring error;
+                if (!cloud::ValidateConfig(validation, error)) {
+                    if (!validation.cloud_token.empty()) SecureZeroMemory(validation.cloud_token.data(), validation.cloud_token.size());
+                    MessageBoxW(hwnd, error.c_str(), L"DJI Cloud", MB_ICONWARNING);
+                    return 0;
+                }
+                self->key_ = std::move(validation.cloud_token);
+                DestroyWindow(hwnd); return 0;
+            }
+            std::array<char, 128> key{};
             GetWindowTextA(self->input_, key.data(), static_cast<int>(key.size()));
-            try { self->key_ = duml::NormalizePairKey(key.data()); }
-            catch (...) { MessageBoxW(hwnd, L"Pair Key 必须是 32 个十六进制字符。", L"DJI Power", MB_ICONWARNING); return 0; }
+            try {
+                if (self->serial_) {
+                    cloud::PropertyTopic(winrt::to_hstring(key.data())); // 复用 SN 校验，不进行网络操作。
+                    self->key_ = key.data();
+                } else self->key_ = duml::NormalizePairKey(key.data());
+            } catch (...) {
+                MessageBoxW(hwnd, self->serial_ ? L"SN 只能包含字母、数字、横线或下划线，长度为 1–64 个字符。" :
+                    L"Pair Key 必须是 32 个十六进制字符。", L"DJI Power", MB_ICONWARNING); return 0;
+            }
             DestroyWindow(hwnd); return 0;
         }
         if (message == WM_CLOSE || (message == WM_COMMAND && LOWORD(wp) == IDCANCEL && HIWORD(wp) == BN_CLICKED)) { DestroyWindow(hwnd); return 0; }
@@ -135,6 +165,7 @@ private:
             return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_WINDOW));
         }
         if (message == WM_DESTROY) {
+            if (self->token_) SetWindowTextW(self->input_, L"");
             DeleteObject(self->font_);
             DeleteObject(self->bold_font_);
             return 0;
@@ -307,13 +338,15 @@ private:
 
         Add(L"STATIC", L"登录信息和临时 Token 仅保存在内存中，获取完成后立即清除。",
             SS_LEFT, 105, 162, 439, 18, IDC_SUBTITLE);
-        cloud_serial_ = Add(L"EDIT", editing_.cloud_serial.c_str(), WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP,
-            105, 91, 335, 26, IDC_CLOUD_SN);
-        const std::wstring token_text(editing_.cloud_token.begin(), editing_.cloud_token.end());
-        cloud_token_ = Add(L"EDIT", token_text.c_str(), WS_BORDER | ES_AUTOHSCROLL | ES_PASSWORD | WS_TABSTOP,
-            105, 127, 335, 26, IDC_CLOUD_TOKEN);
-        SendMessageW(cloud_serial_, EM_SETLIMITTEXT, 64, 0);
-        SendMessageW(cloud_token_, EM_SETLIMITTEXT, 16384, 0);
+        cloud_serial_ = Add(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_TABSTOP | WS_VSCROLL,
+            105, 91, 302, 180, IDC_CLOUD_SN);
+        SetComboHeight(cloud_serial_, 26);
+        Add(L"BUTTON", L"+", BS_PUSHBUTTON | WS_TABSTOP, 414, 91, 26, 26, IDC_ADD_CLOUD_SN);
+        cloud_token_ = Add(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_TABSTOP | WS_VSCROLL,
+            105, 127, 371, 180, IDC_CLOUD_TOKEN);
+        SetComboHeight(cloud_token_, 26);
+        Add(L"BUTTON", L"×", BS_PUSHBUTTON | WS_TABSTOP, 483, 127, 26, 26, IDC_DELETE_CLOUD_TOKEN);
+        Add(L"BUTTON", L"+", BS_PUSHBUTTON | WS_TABSTOP, 518, 127, 26, 26, IDC_ADD_CLOUD_TOKEN);
         cloud_region_ = Add(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | WS_TABSTOP,
             105, 158, 439, 140, IDC_CLOUD_REGION);
         const wchar_t* regions[] = {L"海外 VG · home-api-vg.djigate.com", L"国内 HZ · home-api-hz.djigate.com", L"默认 · home-api.djigate.com"};
@@ -345,6 +378,7 @@ private:
         for (const auto group : group_boxes_)
             SetWindowPos(group, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         RefreshKeys(editing_.pair_key);
+        RefreshCloudLists();
         RefreshDevices();
         UpdateMode();
         SetTimer(hwnd_, 1, 400, nullptr);
@@ -355,10 +389,10 @@ private:
         const bool visible = IsWindowVisible(hwnd_) != FALSE;
         if (visible) SendMessageW(hwnd_, WM_SETREDRAW, FALSE, 0);
         // 下拉列表是独立弹出窗口，必须先收起；模式切换后统一擦除并重绘所有子控件。
-        for (const auto combo : {device_, pair_, cloud_region_}) SendMessageW(combo, CB_SHOWDROPDOWN, FALSE, 0);
-        for (const auto id : {IDC_DEVICE, IDC_PAIR_KEY, IDC_DELETE_KEY, IDC_ADD_KEY, IDC_SUBTITLE})
+        for (const auto combo : {device_, pair_, cloud_serial_, cloud_token_, cloud_region_}) SendMessageW(combo, CB_SHOWDROPDOWN, FALSE, 0);
+        for (const auto id : {IDC_DEVICE, IDC_PAIR_KEY, IDC_DELETE_KEY, IDC_ADD_KEY, IDC_GET_KEY, IDC_SUBTITLE})
             ShowWindow(GetDlgItem(hwnd_, id), cloud ? SW_HIDE : SW_SHOW);
-        for (const auto id : {IDC_CLOUD_SN, IDC_CLOUD_TOKEN, IDC_CLOUD_REGION})
+        for (const auto id : {IDC_CLOUD_SN, IDC_CLOUD_TOKEN, IDC_CLOUD_REGION, IDC_ADD_CLOUD_SN, IDC_DELETE_CLOUD_TOKEN, IDC_ADD_CLOUD_TOKEN})
             ShowWindow(GetDlgItem(hwnd_, id), cloud ? SW_SHOW : SW_HIDE);
         SetDlgItemTextW(hwnd_, IDC_DEVICE_LABEL, cloud ? L"设备 SN：" : L"设备：");
         SetDlgItemTextW(hwnd_, IDC_CREDENTIAL_LABEL, cloud ? L"Token：" : L"Pair Key：");
@@ -367,11 +401,35 @@ private:
         RedrawWindow(hwnd_, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
     }
 
-    static std::wstring ReadText(HWND control) {
-        std::wstring text(static_cast<std::size_t>(GetWindowTextLengthW(control)) + 1, L'\0');
-        const int length = GetWindowTextW(control, text.data(), static_cast<int>(text.size()));
-        text.resize(static_cast<std::size_t>(length));
-        return text;
+    void RefreshCloudLists() {
+        SendMessageW(cloud_serial_, CB_RESETCONTENT, 0, 0);
+        int selected = -1;
+        for (std::size_t index = 0; index < editing_.cloud_serials.size(); ++index) {
+            const auto& serial = editing_.cloud_serials[index];
+            SendMessageW(cloud_serial_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(serial.c_str()));
+            if (serial == editing_.cloud_serial) selected = static_cast<int>(index);
+        }
+        SendMessageW(cloud_serial_, CB_SETCURSEL, selected, 0);
+        SendMessageW(cloud_token_, CB_RESETCONTENT, 0, 0);
+        selected = -1;
+        for (std::size_t index = 0; index < editing_.cloud_tokens.size(); ++index) {
+            const auto& token = editing_.cloud_tokens[index];
+            const auto separator = token.find('_');
+            const auto region = separator <= 8 ? token.substr(0, separator) : std::string{};
+            // 列表只显示编号和区域，绝不把真实 Token 写入控件文本。
+            const auto label = L"Token " + std::to_wstring(index + 1) +
+                (region.empty() ? std::wstring{} : L" · " + std::wstring(region.begin(), region.end()));
+            SendMessageW(cloud_token_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
+            if (token == editing_.cloud_token) selected = static_cast<int>(index);
+        }
+        SendMessageW(cloud_token_, CB_SETCURSEL, selected, 0);
+    }
+
+    void ReadCloudSelection() {
+        const auto sn = static_cast<std::size_t>(SendMessageW(cloud_serial_, CB_GETCURSEL, 0, 0));
+        const auto token = static_cast<std::size_t>(SendMessageW(cloud_token_, CB_GETCURSEL, 0, 0));
+        editing_.cloud_serial = sn < editing_.cloud_serials.size() ? editing_.cloud_serials[sn] : std::wstring{};
+        editing_.cloud_token = token < editing_.cloud_tokens.size() ? editing_.cloud_tokens[token] : std::string{};
     }
 
     void RefreshKeys(const std::string& selected) {
@@ -420,13 +478,10 @@ private:
         editing_.auto_connect = SendDlgItemMessageW(hwnd_, IDC_AUTO_CONNECT, BM_GETCHECK, 0, 0) == BST_CHECKED;
         editing_.auto_reconnect = SendDlgItemMessageW(hwnd_, IDC_AUTO_RECONNECT, BM_GETCHECK, 0, 0) == BST_CHECKED;
         if (editing_.mode == ConnectionMode::cloud) {
-            auto token = ReadText(cloud_token_);
-            editing_.cloud_token = winrt::to_string(token);
-            if (!token.empty()) SecureZeroMemory(token.data(), token.size() * sizeof(wchar_t));
-            editing_.cloud_serial = ReadText(cloud_serial_);
+            ReadCloudSelection();
             const auto region = SendMessageW(cloud_region_, CB_GETCURSEL, 0, 0);
             editing_.cloud_api_host = region == 1 ? L"home-api-hz.djigate.com" : region == 2 ? L"home-api.djigate.com" : L"home-api-vg.djigate.com";
-            if (allow_empty_key && editing_.cloud_token.empty() && editing_.cloud_serial.empty()) return true;
+            if (allow_empty_key && editing_.cloud_token.empty()) return true;
             std::wstring error;
             if (!cloud::ValidateConfig(editing_, error)) {
                 if (show_error) MessageBoxW(hwnd_, error.c_str(), L"DJI Cloud", MB_ICONWARNING);
@@ -471,8 +526,11 @@ private:
         if (cloud) {
             editing_.cloud_token = winrt::to_string(token);
             editing_.cloud_serial = cloud_devices.front().serial_number;
-            SetWindowTextW(cloud_serial_, editing_.cloud_serial.c_str());
-            SetWindowTextW(cloud_token_, token.c_str());
+            if (std::find(editing_.cloud_serials.begin(), editing_.cloud_serials.end(), editing_.cloud_serial) == editing_.cloud_serials.end())
+                editing_.cloud_serials.push_back(editing_.cloud_serial);
+            if (std::find(editing_.cloud_tokens.begin(), editing_.cloud_tokens.end(), editing_.cloud_token) == editing_.cloud_tokens.end())
+                editing_.cloud_tokens.push_back(editing_.cloud_token);
+            RefreshCloudLists();
             if (!token.empty()) SecureZeroMemory(token.data(), token.size() * sizeof(wchar_t));
             MessageBoxW(hwnd_, L"已选择云端设备。点击测试连接；确定后将用当前 Windows 用户的 DPAPI 加密保存 Token。", L"DJI Cloud", MB_ICONINFORMATION);
             return;
@@ -509,7 +567,7 @@ private:
             return 0;
         case WM_DRAWITEM: {
             const auto item = reinterpret_cast<DRAWITEMSTRUCT*>(lp);
-            if (item->CtlID != IDC_DEVICE && item->CtlID != IDC_PAIR_KEY) break;
+            if (item->CtlID != IDC_DEVICE && item->CtlID != IDC_PAIR_KEY && item->CtlID != IDC_CLOUD_SN && item->CtlID != IDC_CLOUD_TOKEN) break;
             const bool selected = (item->itemState & ODS_SELECTED) != 0;
             FillRect(item->hDC, &item->rcItem, GetSysColorBrush(selected ? COLOR_HIGHLIGHT : COLOR_WINDOW));
             if (item->itemID != static_cast<UINT>(-1)) {
@@ -549,6 +607,43 @@ private:
             case IDC_DEVICE:
                 if (HIWORD(wp) == CBN_SELCHANGE) device_cleared_ = false;
                 return 0;
+            case IDC_CLOUD_SN:
+            case IDC_CLOUD_TOKEN:
+                if (HIWORD(wp) == CBN_SELCHANGE) ReadCloudSelection();
+                return 0;
+            case IDC_ADD_CLOUD_TOKEN: {
+                const auto token = KeyInputWindow().Show(hwnd_, false, true);
+                if (!token.empty()) {
+                    ReadCloudSelection();
+                    editing_.cloud_token = token;
+                    if (std::find(editing_.cloud_tokens.begin(), editing_.cloud_tokens.end(), token) == editing_.cloud_tokens.end())
+                        editing_.cloud_tokens.push_back(token);
+                    RefreshCloudLists();
+                }
+                return 0;
+            }
+            case IDC_DELETE_CLOUD_TOKEN: {
+                ReadCloudSelection();
+                const auto index = static_cast<std::size_t>(SendMessageW(cloud_token_, CB_GETCURSEL, 0, 0));
+                if (index < editing_.cloud_tokens.size()) {
+                    editing_.cloud_tokens.erase(editing_.cloud_tokens.begin() + index);
+                    editing_.cloud_token = editing_.cloud_tokens.empty() ? std::string{} :
+                        editing_.cloud_tokens[std::min(index, editing_.cloud_tokens.size() - 1)];
+                    RefreshCloudLists();
+                }
+                return 0;
+            }
+            case IDC_ADD_CLOUD_SN: {
+                const auto serial = KeyInputWindow().Show(hwnd_, true);
+                if (!serial.empty()) {
+                    ReadCloudSelection();
+                    editing_.cloud_serial.assign(serial.begin(), serial.end());
+                    if (std::find(editing_.cloud_serials.begin(), editing_.cloud_serials.end(), editing_.cloud_serial) == editing_.cloud_serials.end())
+                        editing_.cloud_serials.push_back(editing_.cloud_serial);
+                    RefreshCloudLists();
+                }
+                return 0;
+            }
             case IDC_SCAN:
                 if (editing_.mode == ConnectionMode::cloud) { FetchKey(); return 0; }
                 BleManager::Instance().Rescan();
@@ -581,6 +676,8 @@ private:
                 cleared.pair_keys.clear();
                 cleared.cloud_token.clear();
                 cleared.cloud_serial.clear();
+                cleared.cloud_tokens.clear();
+                cleared.cloud_serials.clear();
                 if (!SaveConfig(cleared)) { MessageBoxW(hwnd_, L"清空配置失败。", L"DJI Power", MB_ICONERROR); return 0; }
                 original_ = cleared;
                 editing_.bluetooth_address = 0;
@@ -589,8 +686,9 @@ private:
                 editing_.pair_keys.clear();
                 editing_.cloud_token.clear();
                 editing_.cloud_serial.clear();
-                SetWindowTextW(cloud_token_, L"");
-                SetWindowTextW(cloud_serial_, L"");
+                editing_.cloud_tokens.clear();
+                editing_.cloud_serials.clear();
+                RefreshCloudLists();
                 device_cleared_ = true;
                 changed_ = true;
                 RefreshKeys({});

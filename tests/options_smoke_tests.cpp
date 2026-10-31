@@ -55,10 +55,65 @@ HWND FindChild(HWND parent, const wchar_t* caption) {
         auto& state = *reinterpret_cast<Search*>(value);
         wchar_t text[128]{};
         GetWindowTextW(child, text, 128);
-        if (std::wstring(text) == state.caption) { state.found = child; return FALSE; }
+        if (std::wstring(text) == state.caption && IsWindowVisible(child)) { state.found = child; return FALSE; }
         return TRUE;
     }, reinterpret_cast<LPARAM>(&search));
     return search.found;
+}
+HWND FindRightInRow(HWND window, HWND anchor, const wchar_t* type, const wchar_t* caption = nullptr) {
+    struct Search { RECT row; const wchar_t* type; const wchar_t* caption; HWND found; } search{};
+    GetWindowRect(anchor, &search.row);
+    search.type = type;
+    search.caption = caption;
+    EnumChildWindows(window, [](HWND child, LPARAM value) -> BOOL {
+        auto& state = *reinterpret_cast<Search*>(value);
+        wchar_t type[32]{}, caption[128]{};
+        GetClassNameW(child, type, 32);
+        if (!IsWindowVisible(child) || std::wstring(type) != state.type) return TRUE;
+        GetWindowTextW(child, caption, 128);
+        if (state.caption && std::wstring(caption) != state.caption) return TRUE;
+        RECT rect{};
+        GetWindowRect(child, &rect);
+        const auto center_y = (rect.top + rect.bottom) / 2;
+        if (rect.left >= state.row.right && center_y >= state.row.top && center_y < state.row.bottom) {
+            state.found = child; return FALSE;
+        }
+        return TRUE;
+    }, reinterpret_cast<LPARAM>(&search));
+    return search.found;
+}
+void CALLBACK FillToken(HWND, UINT, UINT_PTR timer, DWORD) {
+    const auto dialog = FindWindowW(L"DJIPowerKeyInputWindow", L"添加 Cloud Token");
+    if (!dialog) return;
+    KillTimer(nullptr, timer);
+    HWND input = nullptr;
+    EnumChildWindows(dialog, [](HWND child, LPARAM value) -> BOOL {
+        wchar_t name[32]{};
+        GetClassNameW(child, name, 32);
+        if (std::wstring(name) == L"Edit") { *reinterpret_cast<HWND*>(value) = child; return FALSE; }
+        return TRUE;
+    }, reinterpret_cast<LPARAM>(&input));
+    REQUIRE_TEST(input != nullptr);
+    REQUIRE_TEST((GetWindowLongPtrW(input, GWL_STYLE) & ES_PASSWORD) != 0);
+    REQUIRE_TEST(SendMessageW(input, EM_GETLIMITTEXT, 0, 0) == 16384);
+    const auto token = L"CN_" + std::wstring(512, L'a');
+    SetWindowTextW(input, token.c_str());
+    SendMessageW(dialog, WM_COMMAND, MAKEWPARAM(IDOK, BN_CLICKED), 0);
+}
+void CALLBACK FillSerial(HWND, UINT, UINT_PTR timer, DWORD) {
+    const auto dialog = FindWindowW(L"DJIPowerKeyInputWindow", nullptr);
+    if (!dialog) return;
+    KillTimer(nullptr, timer);
+    HWND input = nullptr;
+    EnumChildWindows(dialog, [](HWND child, LPARAM value) -> BOOL {
+        wchar_t name[32]{};
+        GetClassNameW(child, name, 32);
+        if (std::wstring(name) == L"Edit") { *reinterpret_cast<HWND*>(value) = child; return FALSE; }
+        return TRUE;
+    }, reinterpret_cast<LPARAM>(&input));
+    REQUIRE_TEST(input != nullptr);
+    SetWindowTextW(input, L"TESTMANUAL123");
+    SendMessageW(dialog, WM_COMMAND, MAKEWPARAM(IDOK, BN_CLICKED), 0);
 }
 void CALLBACK CheckWindow(HWND, UINT, UINT_PTR timer, DWORD) {
     HWND window = nullptr;
@@ -86,21 +141,61 @@ void CALLBACK CheckWindow(HWND, UINT, UINT_PTR timer, DWORD) {
     REQUIRE_TEST(FindChild(window, L"Token：") != nullptr);
     REQUIRE_TEST(FindChild(window, L"设备 SN：") != nullptr);
     REQUIRE_TEST(FindChild(window, L"登录选设备") != nullptr);
-    int visible_edits = 0, masked_edits = 0;
-    struct Counts { int& visible; int& masked; } counts{visible_edits, masked_edits};
+    REQUIRE_TEST(FindChild(window, L"账号登录") == nullptr);
+    int visible_edits = 0, visible_combos = 0;
+    struct Counts { int& edits; int& combos; } counts{visible_edits, visible_combos};
     EnumChildWindows(window, [](HWND child, LPARAM value) -> BOOL {
         auto& state = *reinterpret_cast<Counts*>(value);
         wchar_t name[32]{};
         GetClassNameW(child, name, 32);
-        if (std::wstring(name) == L"Edit" && IsWindowVisible(child)) {
-            ++state.visible;
-            if (GetWindowLongPtrW(child, GWL_STYLE) & ES_PASSWORD) ++state.masked;
-        }
+        if (std::wstring(name) == L"Edit" && IsWindowVisible(child)) ++state.edits;
+        if (std::wstring(name) == L"ComboBox" && IsWindowVisible(child)) ++state.combos;
         return TRUE;
     }, reinterpret_cast<LPARAM>(&counts));
-    REQUIRE_TEST(visible_edits == 2 && masked_edits == 1);
+    REQUIRE_TEST(visible_edits == 0 && visible_combos == 3);
+    const auto add_sn = FindChild(window, L"+");
+    REQUIRE_TEST(add_sn != nullptr);
+    const auto serial_timer = SetTimer(nullptr, 0, 50, FillSerial);
+    REQUIRE_TEST(serial_timer != 0);
+    SendMessageW(add_sn, BM_CLICK, 0, 0);
+    KillTimer(nullptr, serial_timer);
+    // 手工 SN 必须成为下拉列表的当前选项，而不是只更新显示文字。
+    HWND selected_serial = nullptr;
+    EnumChildWindows(window, [](HWND child, LPARAM value) -> BOOL {
+        wchar_t name[32]{}, text[128]{};
+        GetClassNameW(child, name, 32);
+        GetWindowTextW(child, text, 128);
+        if (std::wstring(name) == L"ComboBox" && std::wstring(text) == L"TESTMANUAL123") {
+            *reinterpret_cast<HWND*>(value) = child; return FALSE;
+        }
+        return TRUE;
+    }, reinterpret_cast<LPARAM>(&selected_serial));
+    REQUIRE_TEST(selected_serial != nullptr);
+    REQUIRE_TEST(SendMessageW(selected_serial, CB_GETCURSEL, 0, 0) != CB_ERR);
+    const auto token_combo = FindRightInRow(window, FindChild(window, L"Token："), L"ComboBox");
+    REQUIRE_TEST(token_combo != nullptr);
+    const auto add_token = FindRightInRow(window, token_combo, L"Button", L"+");
+    const auto delete_token = FindRightInRow(window, token_combo, L"Button", L"×");
+    REQUIRE_TEST(add_token && delete_token);
+    const auto original_count = SendMessageW(token_combo, CB_GETCOUNT, 0, 0);
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        const auto token_timer = SetTimer(nullptr, 0, 50, FillToken);
+        REQUIRE_TEST(token_timer != 0);
+        SendMessageW(add_token, BM_CLICK, 0, 0);
+        KillTimer(nullptr, token_timer);
+        REQUIRE_TEST(SendMessageW(token_combo, CB_GETCOUNT, 0, 0) == original_count + 1);
+        REQUIRE_TEST(SendMessageW(token_combo, CB_GETCURSEL, 0, 0) != CB_ERR);
+        wchar_t label[128]{};
+        GetWindowTextW(token_combo, label, 128);
+        REQUIRE_TEST(std::wstring(label).find(L"Token ") == 0);
+        REQUIRE_TEST(std::wstring(label).find(std::wstring(16, L'a')) == std::wstring::npos);
+    }
+    SendMessageW(delete_token, BM_CLICK, 0, 0);
+    REQUIRE_TEST(SendMessageW(token_combo, CB_GETCOUNT, 0, 0) == original_count);
     SendMessageW(ble, BM_CLICK, 0, 0);
+    REQUIRE_TEST(!IsWindowVisible(add_token) && !IsWindowVisible(delete_token));
     REQUIRE_TEST(FindChild(window, L"Pair Key：") != nullptr);
+    REQUIRE_TEST(FindChild(window, L"账号登录") != nullptr);
     // 重复切换时，隐藏控件的下拉弹窗不能残留；相邻控件必须相互裁剪。
     for (int iteration = 0; iteration < 6; ++iteration) {
         HWND combo = nullptr;

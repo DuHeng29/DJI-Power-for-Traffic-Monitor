@@ -23,6 +23,10 @@ int main() {
     config.cloud_token = "CN_offline-test-token";
     config.cloud_serial = L"TEST123";
     config.cloud_api_host = L"home-api-hz.djigate.com";
+    config.cloud_serials = {config.cloud_serial, L"TEST456"};
+    config.cloud_tokens = {config.cloud_token};
+    for (int index = 0; index < 100; ++index)
+        config.cloud_tokens.push_back("US_offline-history-token-" + std::to_string(index));
     for (int index = 0; index < 200; ++index) {
         char key[33]{};
         sprintf_s(key, "%032x", index);
@@ -31,6 +35,18 @@ int main() {
     config.pair_key = config.pair_keys[49];
     const bool saved = dji_power::SaveConfig(config);
     const auto loaded = dji_power::LoadConfig();
+    // 删除新增历史字段，模拟升级前只有单条 SN/Token 的旧配置。
+    REQUIRE_TEST(WritePrivateProfileStringW(L"connection", L"cloud_tokens_dpapi", nullptr, path.c_str()));
+    REQUIRE_TEST(WritePrivateProfileStringW(L"connection", L"cloud_serials", nullptr, path.c_str()));
+    const auto migrated = dji_power::LoadConfig();
+    REQUIRE_TEST(migrated.cloud_tokens == std::vector<std::string>{config.cloud_token});
+    REQUIRE_TEST(migrated.cloud_serials == std::vector<std::wstring>{config.cloud_serial});
+    // 重新保存空配置，验证“清空”不会把历史凭据重新带回来。
+    REQUIRE_TEST(dji_power::SaveConfig(dji_power::PluginConfig{}));
+    const auto cleared = dji_power::LoadConfig();
+    REQUIRE_TEST(cleared.cloud_tokens.empty() && cleared.cloud_serials.empty());
+    REQUIRE_TEST(cleared.cloud_token.empty() && cleared.cloud_serial.empty());
+    REQUIRE_TEST(dji_power::SaveConfig(config));
     std::ifstream file(path, std::ios::binary);
     const std::string on_disk((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
     file.close();
@@ -38,6 +54,7 @@ int main() {
     const bool removed = std::filesystem::remove(path);
     REQUIRE_TEST(saved);
     REQUIRE_TEST(on_disk.find(config.cloud_token) == std::string::npos);
+    REQUIRE_TEST(on_disk.find("offline-history-token") == std::string::npos);
     REQUIRE_TEST(removed);
     REQUIRE_TEST(loaded.pair_keys == config.pair_keys);
     REQUIRE_TEST(loaded.pair_key == config.pair_key);
@@ -48,5 +65,7 @@ int main() {
     REQUIRE_TEST(loaded.cloud_token == config.cloud_token);
     REQUIRE_TEST(loaded.cloud_serial == config.cloud_serial);
     REQUIRE_TEST(loaded.cloud_api_host == config.cloud_api_host);
+    REQUIRE_TEST(loaded.cloud_tokens == config.cloud_tokens);
+    REQUIRE_TEST(loaded.cloud_serials == config.cloud_serials);
     return 0;
 }
