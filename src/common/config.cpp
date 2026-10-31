@@ -14,9 +14,15 @@ namespace dji_power {
 namespace {
 std::wstring ConfigPath() { return ModuleDirectory() + L"\\config.ini"; }
 std::wstring ReadIni(const wchar_t* key, const wchar_t* fallback = L"") {
-    std::array<wchar_t, 2048> buffer{};
-    GetPrivateProfileStringW(L"connection", key, fallback, buffer.data(), static_cast<DWORD>(buffer.size()), ConfigPath().c_str());
-    return buffer.data();
+    std::vector<wchar_t> buffer(2048);
+    const auto path = ConfigPath();
+    for (;;) {
+        const auto length = GetPrivateProfileStringW(L"connection", key, fallback, buffer.data(),
+            static_cast<DWORD>(buffer.size()), path.c_str());
+        if (length < buffer.size() - 1) return std::wstring(buffer.data(), length);
+        // 密文随 Key 数量增长；检测截断后扩大缓冲区，不能解密残缺密文。
+        buffer.resize(buffer.size() * 2);
+    }
 }
 std::wstring Protect(const std::string& plain) {
     if (plain.empty()) return {};

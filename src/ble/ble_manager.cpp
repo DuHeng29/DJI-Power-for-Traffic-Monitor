@@ -321,13 +321,14 @@ struct BleManager::Impl {
                     current = config;
                     requested = reconnect_requested;
                     reconnect_requested = false;
+                    // 消费断线事件，避免禁止重连时等待条件始终成立而空转。
+                    link_lost = false;
                 }
                 if (token.stop_requested()) break;
                 if ((!current.auto_connect && !requested) || (!reconnect_allowed && !requested) || !IsValidPairKey(current.pair_key)) continue;
                 if (requested) reconnect_allowed = true;
                 const auto address = TargetAddress();
                 if (!address) continue;
-                link_lost = false;
                 bool connected = false;
                 try { connected = Connect(address, current.pair_key); }
                 catch (const winrt::hresult_error& error) { store.SetStatus(ConnectionState::error, connection_stage + L"失败：" + std::wstring(error.message())); }

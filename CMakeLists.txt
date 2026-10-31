@@ -89,6 +89,13 @@ target_link_libraries(dji_auth_ctl PRIVATE user32)
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(config_tests tests/config_tests.cpp)
+    target_link_libraries(config_tests PRIVATE dji_power_core)
+    target_compile_definitions(config_tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_compile_options(config_tests PRIVATE /utf-8)
+    set_target_properties(config_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/config-tests")
+    add_test(NAME config_tests COMMAND config_tests)
+
     add_executable(protocol_tests tests/protocol_tests.cpp)
     target_link_libraries(protocol_tests PRIVATE dji_power_core)
     target_compile_definitions(protocol_tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
