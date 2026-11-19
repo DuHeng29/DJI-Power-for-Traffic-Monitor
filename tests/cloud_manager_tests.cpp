@@ -1,5 +1,6 @@
 // 不提供真实 Token，不发起网络连接，验证手工连接模式及停止/重配生命周期。
 #include "cloud/cloud_manager.hpp"
+#include "cloud/telemetry_timeout.hpp"
 #include "test_check.hpp"
 #include <windows.h>
 #include <chrono>
@@ -8,6 +9,12 @@
 HMODULE g_module = nullptr;
 int main() {
     using namespace std::chrono_literals;
+    using dji_power::cloud::OnTelemetryIdle;
+    using dji_power::cloud::TelemetryTimeoutAction;
+    REQUIRE_TEST(OnTelemetryIdle(180s, false, true) == TelemetryTimeoutAction::none);
+    REQUIRE_TEST(OnTelemetryIdle(180s - 1ms, true, true) == TelemetryTimeoutAction::none);
+    REQUIRE_TEST(OnTelemetryIdle(180s, true, true) == TelemetryTimeoutAction::reconnect);
+    REQUIRE_TEST(OnTelemetryIdle(180s, true, false) == TelemetryTimeoutAction::wait_for_telemetry);
     auto& manager = dji_power::CloudManager::Instance();
     dji_power::PluginConfig config;
     config.mode = dji_power::ConnectionMode::cloud;

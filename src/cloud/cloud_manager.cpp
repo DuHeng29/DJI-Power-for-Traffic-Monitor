@@ -1,5 +1,6 @@
 #include "cloud/cloud_manager.hpp"
 #include "cloud/cloud_protocol.hpp"
+#include "cloud/telemetry_timeout.hpp"
 #include <windows.h>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
@@ -22,6 +23,7 @@ namespace foundation = winrt::Windows::Foundation;
 namespace streams = winrt::Windows::Storage::Streams;
 namespace sockets = winrt::Windows::Networking::Sockets;
 namespace http = winrt::Windows::Web::Http;
+class TelemetryTimeout {};
 void CheckStop(std::stop_token token) { if (token.stop_requested()) throw winrt::hresult_canceled(); }
 template<typename Operation>
 void Wait(const Operation& operation, std::stop_token token, std::chrono::seconds timeout) {
@@ -111,8 +113,16 @@ struct CloudManager::Impl {
                 if ((!subscribed && now >= handshake_deadline) || now - last_received > 90s)
                     throw std::runtime_error("DJI Cloud MQTT response timeout");
                 if (now - last_sent >= 30s) send({0xC0, 0});
-                if (subscribed && now - last_telemetry >= 180s && store.Get().connection != ConnectionState::error)
-                    store.SetStatus(ConnectionState::error, L"云端设备遥测已超时，请确认电源已联网");
+                switch (cloud::OnTelemetryIdle(now - last_telemetry, subscribed, auto_reconnect)) {
+                case cloud::TelemetryTimeoutAction::reconnect:
+                    throw TelemetryTimeout{};
+                case cloud::TelemetryTimeoutAction::wait_for_telemetry:
+                    if (store.Get().connection != ConnectionState::error)
+                        store.SetStatus(ConnectionState::error, L"云端设备遥测已超时，请确认电源已联网");
+                    break;
+                case cloud::TelemetryTimeoutAction::none:
+                    break;
+                }
                 if (load.Status() == foundation::AsyncStatus::Started) {
                     std::unique_lock lock(mutex);
                     condition.wait_for(lock, 50ms, [&] { return token.stop_requested(); });
@@ -129,9 +139,10 @@ struct CloudManager::Impl {
                         if (packet.body[1] != 0) throw std::runtime_error("DJI Cloud MQTT authentication rejected (code " + std::to_string(packet.body[1]) + ")");
                         connected = true; send(cloud::SubscribePacket(topic));
                     } else if (type == 9) {
-                        if (!connected || packet.header != 0x90 || packet.body != cloud::Bytes{0, 1, 0})
+                        if (!connected || subscribed || packet.header != 0x90 || packet.body != cloud::Bytes{0, 1, 0})
                             throw std::runtime_error("DJI Cloud telemetry subscription rejected");
                         subscribed = true;
+                        last_telemetry = now;
                         store.SetStatus(ConnectionState::connected, L"DJI Cloud 已连接，等待设备遥测");
                     } else if (type == 3) {
                         if (!connected) throw std::runtime_error("MQTT publication before CONNACK");
@@ -149,7 +160,7 @@ struct CloudManager::Impl {
                         value.device_name = config.device_name;
                         value.connection = ConnectionState::connected;
                         value.status = L"DJI Cloud 已连接";
-                        value.stale_after = 180s; value.updated_at = now;
+                        value.stale_after = cloud::kTelemetryTimeout; value.updated_at = now;
                         last_telemetry = now;
                         store.Update(value);
                     } else if (type == 14) throw std::runtime_error("DJI Cloud MQTT disconnected");
@@ -176,6 +187,9 @@ struct CloudManager::Impl {
                     catch (const cloud::AuthenticationError&) {
                         store.SetStatus(ConnectionState::error, L"DJI Cloud Token 已失效，请重新登录账号");
                         break; // 长期 Token 失效时等待用户登录，不反复请求账号服务。
+                    }
+                    catch (const TelemetryTimeout&) {
+                        store.SetStatus(ConnectionState::error, L"云端设备遥测已超时，请确认电源已联网");
                     }
                     catch (const winrt::hresult_canceled&) { if (token.stop_requested()) break; store.SetStatus(ConnectionState::error, L"DJI Cloud 网络操作被取消"); }
                     catch (const winrt::hresult_error& error) {

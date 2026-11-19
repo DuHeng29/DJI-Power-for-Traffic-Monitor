@@ -1,6 +1,6 @@
 # DJI Power for TrafficMonitor
 
-当前正式版本：**1.0.0**。
+当前正式版本：**1.0.0**。本分支正在测试 **1.0.1**。
 
 一个面向 Windows 的原生 [TrafficMonitor](https://github.com/zhongyang219/TrafficMonitor) 插件，通过本地蓝牙低功耗（BLE）或 DJI Cloud 读取 DJI Power 户外电源的实时状态。
 
@@ -31,7 +31,7 @@ TrafficMonitor → DJIPowerPlugin.dll → Windows BLE → DJI Power
 - 可选择 DJI Cloud，以 Member Token 换取短期 MQTT 凭据并订阅实时遥测
 - Cloud 支持账号登录选择设备，SN 和 Token 可从历史下拉列表选择，SN 支持通过“+”手工添加
 - Cloud Token 使用当前 Windows 用户的 DPAPI 加密保存；短期 MQTT 凭据到期前自动更新
-- Cloud 断线自动退避重连；Token 失效提示重新登录；超过 3 分钟没有遥测时显示未知值
+- Cloud 连续 3 分钟未收到有效遥测时显示未知值；启用“断线自动重连”时会重新连接并订阅遥测，连接异常时按退避策略重试。Token 失效时提示重新登录
 
 ## 支持的设备
 
